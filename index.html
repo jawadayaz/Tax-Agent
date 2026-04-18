@@ -524,9 +524,15 @@
         for (let j = start; j < bytes.length - 9; j++) {
           if (bytes[j] === 101 && matchAt(bytes, j, EM)) { end = j; break; }
         }
-        // Advance past the full 'endstream' keyword to avoid false-matching its
-        // embedded 'stream' on the next iteration (endstream[3..] = 'stream')
-        if (end > start) { chunks.push(bytes.slice(start, end)); i = end + EM.length - 1; }
+        // Strip the mandatory \r\n or \n that the PDF spec requires before 'endstream'
+        // — that byte is NOT part of the compressed data and causes "junk after end" errors.
+        if (end > start) {
+          let dataEnd = end;
+          if (dataEnd > start && bytes[dataEnd - 1] === 10) dataEnd--;  // \n
+          if (dataEnd > start && bytes[dataEnd - 1] === 13) dataEnd--;  // \r
+          chunks.push(bytes.slice(start, dataEnd));
+          i = end + EM.length - 1;
+        }
       }
 
       // Find datasets XML among decompressed chunks
