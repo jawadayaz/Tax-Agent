@@ -385,6 +385,77 @@
       return payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
     }
 
+    // ─── Local cache helpers ──────────────────────────────────────────────────
+    // IndexedDB: persists FileSystemDirectoryHandle across page loads
+    async function openCacheDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open('tax-agent-cache', 1);
+        req.onupgradeneeded = e => e.target.result.createObjectStore('meta');
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = e => reject(e.target.error);
+      });
+    }
+    async function idbGet(db, key) {
+      return new Promise(resolve => {
+        const req = db.transaction('meta', 'readonly').objectStore('meta').get(key);
+        req.onsuccess = () => resolve(req.result ?? null);
+        req.onerror = () => resolve(null);
+      });
+    }
+    async function idbPut(db, key, value) {
+      return new Promise(resolve => {
+        const req = db.transaction('meta', 'readwrite').objectStore('meta').put(value, key);
+        req.onsuccess = () => resolve(true);
+        req.onerror = () => resolve(false);
+      });
+    }
+
+    // Verify (and re-request if needed) readwrite permission on a stored dir handle
+    async function verifyDirHandle(handle) {
+      if (!handle) return null;
+      try {
+        const p = await handle.queryPermission({ mode: 'readwrite' });
+        if (p === 'granted') return handle;
+        const r = await handle.requestPermission({ mode: 'readwrite' });
+        return r === 'granted' ? handle : null;
+      } catch { return null; }
+    }
+
+    // Write a base64url-encoded attachment to the cache folder
+    async function saveToCacheDir(dirHandle, filename, b64url) {
+      try {
+        const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+        const bin = atob(b64);
+        const buf = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+        const fh = await dirHandle.getFileHandle(filename, { create: true });
+        const w = await fh.createWritable();
+        await w.write(buf);
+        await w.close();
+        return true;
+      } catch(e) { console.warn('[tax-agent] cache write failed:', filename, e.message); return false; }
+    }
+
+    // Check whether a file already exists in the cache folder
+    async function existsInCacheDir(dirHandle, filename) {
+      try { await dirHandle.getFileHandle(filename); return true; } catch { return false; }
+    }
+
+    // Per-year message cache in localStorage — keyed by msgId
+    // Structure: { [msgId]: { subject, from, atts: [{filename, parsedAccounts}] } }
+    function loadMsgCache(taxYear) {
+      try { return JSON.parse(localStorage.getItem(`tax-agent-msgcache-${taxYear}`) || '{}'); } catch { return {}; }
+    }
+    function saveMsgCacheEntry(taxYear, msgId, entry, existingCache) {
+      try {
+        const cache = existingCache || loadMsgCache(taxYear);
+        cache[msgId] = entry;
+        localStorage.setItem(`tax-agent-msgcache-${taxYear}`, JSON.stringify(cache));
+        return cache;
+      } catch { return existingCache || {}; }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Extract accounts directly from FinCEN XFA PDF (no AI needed)
     async function extractXFAAccounts(file) {
       const buf = await file.arrayBuffer();
@@ -960,7 +1031,8 @@ Only JSON array, no explanation.`, file);
     function SetupScreen({ credentials, setCredentials, scanSources, setScanSources, localFolder, setLocalFolder,
                            geminiKey, setGeminiKey, googleClientId, setGoogleClientId, gmailToken, setGmailToken, connectGmail,
                            priorFbarFile, setPriorFbarFile, uploadedStatements, setUploadedStatements,
-                           priorManualAccounts, setPriorManualAccounts, taxYear, onNext }) {
+                           priorManualAccounts, setPriorManualAccounts, taxYear, onNext,
+                           cacheDir, cacheDirName, pickCacheFolder }) {
       const fileRef = useRef();
       const stmtRef = useRef();
       const priorYear = taxYear - 1;
@@ -1094,6 +1166,20 @@ Only JSON array, no explanation.`, file);
             />
           )}
 
+          <div style={{display:'flex', alignItems:'center', gap:10, padding:'9px 12px', background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:'var(--radius)', marginBottom:4, fontSize:13}}>
+            <span style={{color:'var(--text2)', flex:1}}>
+              {cacheDirName
+                ? <><span style={{color:'var(--green-text)', fontWeight:500}}>✓ Cache folder:</span> <span style={{fontFamily:'monospace', fontSize:12}}>{cacheDirName}</span></>
+                : <span style={{color:'var(--text3)'}}>No cache folder — attachments re-downloaded every scan</span>}
+            </span>
+            <button className="btn-ghost" style={{fontSize:11, flexShrink:0}} onClick={pickCacheFolder}>
+              {cacheDirName ? 'Change' : 'Pick folder'}
+            </button>
+          </div>
+          <div style={{fontSize:11, color:'var(--text3)', marginBottom:16}}>
+            Downloaded attachments are saved here; re-scans only fetch new emails (delta).
+          </div>
+
           <hr className="divider"/>
 
           <div className="section-label">Your credentials</div>
@@ -1130,7 +1216,7 @@ Only JSON array, no explanation.`, file);
     }
 
     // ─── ScanScreen ───────────────────────────────────────────────────────────
-    function ScanScreen({ taxYear, geminiKey, gmailToken, setGmailToken, priorFbarFile, uploadedStatements, priorManualAccounts, setAccounts, setFxRate, onNext, onBack }) {
+    function ScanScreen({ taxYear, geminiKey, gmailToken, setGmailToken, priorFbarFile, uploadedStatements, priorManualAccounts, setAccounts, setFxRate, onNext, onBack, cacheDir }) {
       const isGmail = geminiKey && gmailToken;
       const isLocal = geminiKey && uploadedStatements.length > 0;
       const isReal = isGmail || isLocal || (geminiKey && (priorFbarFile || priorManualAccounts.length > 0));
@@ -1274,11 +1360,41 @@ Only JSON array, no explanation.`, file);
             return [...withoutMatch, ...withStatus, { id:'match', label:'Matching accounts', status:'pending' }];
           });
 
+          // Load per-year message cache (parsed results keyed by msgId)
+          let msgCache = loadMsgCache(taxYear);
+          // Verify cache folder permission (non-blocking; null if not set or denied)
+          const activeCacheDir = cacheDir ? await verifyDirHandle(cacheDir) : null;
+
           const scannedList = [];
-          const seenFiles = new Set();
+          const seenMsgIds = new Set();  // dedup across queries (same msg can match multiple queries)
           const seenAccounts = new Set();
           // Track per-name totals so multiple queries for same institution merge in UI
           const nameFoundCount = {};
+
+          // Helper: merge a parsed account into scannedList with dedup
+          function mergeAccount(parsed, subject, from, queryId) {
+            if (!parsed.institution_name) return false;
+            const last4 = (parsed.account_number || '').replace(/\*/g,'').slice(-4);
+            const normName = normInst(parsed.institution_name);
+            const dedupeKey = normName + '|' + last4;
+            if (seenAccounts.has(dedupeKey)) {
+              const srcRank = { bank: 3, brokerage: 3, cas_mf: 2, cas_demat: 2, portfolio_manager: 1 };
+              const existing = scannedList.find(s => normInst(s.institution_name) + '|' + (s.account_number||'').replace(/\*/g,'').slice(-4) === dedupeKey);
+              if (existing) {
+                const newRank = srcRank[parsed.source_type] || 1;
+                const oldRank = srcRank[existing.source_type] || 1;
+                if (newRank > oldRank) {
+                  Object.assign(existing, { ...parsed, _source: `Gmail: ${subject.slice(0,50)}`, _from: from, _sources: [...(existing._sources||[existing._source]), `Gmail: ${subject.slice(0,50)}`] });
+                } else {
+                  existing._sources = [...(existing._sources||[existing._source]), `Gmail: ${subject.slice(0,50)}`];
+                }
+              }
+              return false;
+            }
+            seenAccounts.add(dedupeKey);
+            scannedList.push({ ...parsed, _source: `Gmail: ${subject.slice(0,50)}`, _from: from, _sources: [`Gmail: ${subject.slice(0,50)}`], _queryId: queryId });
+            return true;
+          }
 
           for (let i = 0; i < gmailItems.length; i++) {
             if (cancelled) return scannedList;
@@ -1295,45 +1411,54 @@ Only JSON array, no explanation.`, file);
               const messages = await gmailSearch(gmailToken, item.q, 10);
               for (const msg of messages) {
                 if (cancelled) return scannedList;
+                if (seenMsgIds.has(msg.id)) continue;
+                seenMsgIds.add(msg.id);
+
+                // ── Cache hit: use stored parsed results, skip all API calls ──
+                if (msgCache[msg.id]) {
+                  const cached = msgCache[msg.id];
+                  for (const att of (cached.atts || [])) {
+                    for (const parsed of (att.parsedAccounts || [])) {
+                      if (mergeAccount(parsed, cached.subject, cached.from, item.id)) found++;
+                    }
+                  }
+                  continue;
+                }
+
+                // ── Cache miss: fetch from Gmail, parse, then cache ──
                 const full = await gmailGetMessage(gmailToken, msg.id);
                 const subject = gmailHeader(full.payload, 'Subject');
                 const from = gmailHeader(full.payload, 'From');
                 const attachments = extractAttachments(full.payload);
+                const cacheEntry = { subject, from, atts: [] };
+
                 for (const att of attachments) {
-                  if (seenFiles.has(att.filename)) continue;
-                  seenFiles.add(att.filename);
                   try {
                     const b64 = await gmailGetAttachment(gmailToken, msg.id, att.attId);
-                    const parsedArr = await parseStatement({ data: b64, mimeType: att.mimeType, name: att.filename }, geminiKey);
-                    for (const parsed of parsedArr) {
-                      if (!parsed.institution_name) continue;
-                      const last4 = (parsed.account_number || '').replace(/\*/g,'').slice(-4);
-                      const normName = normInst(parsed.institution_name);
-                      // Dedup key: normalised institution name + account last4
-                      const dedupeKey = normName + '|' + last4;
-                      if (seenAccounts.has(dedupeKey)) {
-                        // Already seen this account — update values if this source is more authoritative
-                        // (direct statement > portfolio manager report > CAS aggregation)
-                        const srcRank = { bank: 3, brokerage: 3, cas_mf: 2, cas_demat: 2, portfolio_manager: 1 };
-                        const existing = scannedList.find(s => normInst(s.institution_name) + '|' + (s.account_number||'').replace(/\*/g,'').slice(-4) === dedupeKey);
-                        if (existing) {
-                          const newRank = srcRank[parsed.source_type] || 1;
-                          const oldRank = srcRank[existing.source_type] || 1;
-                          if (newRank > oldRank) {
-                            // Replace with more authoritative source
-                            Object.assign(existing, { ...parsed, _source: `Gmail: ${subject.slice(0,50)}`, _from: from, _sources: [...(existing._sources||[existing._source]), `Gmail: ${subject.slice(0,50)}`] });
-                          } else {
-                            existing._sources = [...(existing._sources||[existing._source]), `Gmail: ${subject.slice(0,50)}`];
-                          }
-                        }
-                        continue;
+
+                    // Save attachment to local cache folder if available
+                    if (activeCacheDir) {
+                      // Sanitize: date prefix + sender slug + original filename
+                      const datePrefix = new Date().toISOString().slice(0,10);
+                      const senderSlug = from.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30);
+                      const cacheFilename = `${datePrefix}_${senderSlug}_${att.filename}`.slice(0, 200);
+                      // Only write if not already on disk
+                      if (!(await existsInCacheDir(activeCacheDir, cacheFilename))) {
+                        await saveToCacheDir(activeCacheDir, cacheFilename, b64);
                       }
-                      seenAccounts.add(dedupeKey);
-                      scannedList.push({ ...parsed, _source: `Gmail: ${subject.slice(0,50)}`, _from: from, _sources: [`Gmail: ${subject.slice(0,50)}`], _queryId: item.id });
-                      found++;
+                    }
+
+                    const parsedArr = await parseStatement({ data: b64, mimeType: att.mimeType, name: att.filename }, geminiKey);
+                    cacheEntry.atts.push({ filename: att.filename, parsedAccounts: parsedArr });
+
+                    for (const parsed of parsedArr) {
+                      if (mergeAccount(parsed, subject, from, item.id)) found++;
                     }
                   } catch(_) {}
                 }
+
+                // Persist cache entry for next scan run
+                msgCache = saveMsgCacheEntry(taxYear, msg.id, cacheEntry, msgCache);
               }
               nameFoundCount[item.label] = (nameFoundCount[item.label] || 0) + found;
               // Only update UI status on last query for this name, or if we found something
@@ -2109,6 +2234,9 @@ Only JSON array, no explanation.`, file);
       const [credentials, setCredentials] = useState({ pan: '', dob: '', fullName: '' });
       const [scanSources, setScanSources] = useState({ gmail: false, drive: false, local: false });
       const [localFolder, setLocalFolder] = useState('~/Documents/tax-agent/inbox');
+      const [cacheDir, setCacheDir] = useState(null);        // FileSystemDirectoryHandle
+      const [cacheDirName, setCacheDirName] = useState('');  // display name
+      const cacheDirDB = useRef(null);                       // IDB instance
       const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gemini_key') || '');
       const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem('google_client_id') || '');
       const [gmailToken, setGmailToken] = useState(() => sessionStorage.getItem('gmail_token') || null);
@@ -2134,7 +2262,7 @@ Only JSON array, no explanation.`, file);
         return new File([bytes], name, { type });
       }
 
-      // Restore files on mount
+      // Restore files and cache folder on mount
       useEffect(() => {
         const saved = localStorage.getItem('fbar_creds');
         if (saved) { try { setCredentials(JSON.parse(saved)); } catch(_) {} }
@@ -2146,6 +2274,16 @@ Only JSON array, no explanation.`, file);
           const s = sessionStorage.getItem('uploaded_statements');
           if (s) setUploadedStatements(JSON.parse(s).map(sessionToFile));
         } catch(_) {}
+
+        // Restore saved cache directory handle from IndexedDB
+        openCacheDB().then(async db => {
+          cacheDirDB.current = db;
+          const handle = await idbGet(db, 'cacheDir');
+          if (handle) {
+            setCacheDir(handle);
+            setCacheDirName(handle.name);
+          }
+        }).catch(() => {});
       }, []);
       useEffect(() => {
         if (credentials.pan || credentials.fullName) {
@@ -2175,6 +2313,21 @@ Only JSON array, no explanation.`, file);
           sessionStorage.removeItem('uploaded_statements');
         }
       }, [uploadedStatements]);
+
+      async function pickCacheFolder() {
+        if (!window.showDirectoryPicker) {
+          alert('Your browser does not support the File System Access API.\nUse Chrome or Edge to enable local caching.');
+          return;
+        }
+        try {
+          const handle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
+          setCacheDir(handle);
+          setCacheDirName(handle.name);
+          if (cacheDirDB.current) await idbPut(cacheDirDB.current, 'cacheDir', handle);
+        } catch(e) {
+          if (e.name !== 'AbortError') console.warn('pickCacheFolder:', e.message);
+        }
+      }
 
       function navigate(target) {
         if (typeof target === 'string' && STEPS.includes(target)) { setStep(target); return; }
@@ -2263,6 +2416,7 @@ Only JSON array, no explanation.`, file);
               uploadedStatements={uploadedStatements} setUploadedStatements={setUploadedStatements}
               priorManualAccounts={priorManualAccounts} setPriorManualAccounts={setPriorManualAccounts}
               taxYear={taxYear} onNext={navigate}
+              cacheDir={cacheDir} cacheDirName={cacheDirName} pickCacheFolder={pickCacheFolder}
             />
           )}
           {step === 'scan' && (
@@ -2273,6 +2427,7 @@ Only JSON array, no explanation.`, file);
               priorManualAccounts={priorManualAccounts}
               setAccounts={setAccounts} setFxRate={setFxRate}
               onNext={navigate} onBack={goBack}
+              cacheDir={cacheDir}
             />
           )}
           {step === 'review' && <ReviewScreen {...screenProps}/>}
