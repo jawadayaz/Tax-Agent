@@ -535,102 +535,79 @@
         }
       }
 
-      // Find datasets XML among decompressed chunks.
-      // The FinCEN PDF has TWO xfa:datasets streams:
-      //   1. Schema/template — has <dd:dataDescription>, no <xfa:data> with real content
-      //   2. Data stream    — has <xfa:data> wrapping the actual form values
-      // Use <xfa:data> as the POSITIVE signal (it only appears in the data stream).
-      console.log(`[tax-agent] XFA: scanning ${chunks.length} streams`);
-      let xfaSchemaCount = 0, xfaDataCount = 0;
-      for (let si = 0; si < chunks.length; si++) {
-        const chunk = chunks[si];
-        const text = await tryDecompress(chunk);
-        if (!text) { console.log(`[tax-agent] XFA: stream ${si} — decompression failed (size ${chunk.length})`); continue; }
-        // Quick pre-filter: must mention the BSA form namespace/prefix
-        if (!text.includes('ffbar:BSAForm') && !text.includes('xfa:datasets')) continue;
-        // Data stream has <xfa:data>; schema stream does not (or has it empty/absent)
-        const hasDataEl = text.includes('<xfa:data>') || text.includes('<xfa:data ');
-        if (!hasDataEl) {
-          xfaSchemaCount++;
-          console.log(`[tax-agent] XFA: stream ${si} — schema (skipped), length: ${text.length}`);
-          continue;
-        }
-        xfaDataCount++;
-        console.log('[tax-agent] XFA: found data stream', si, 'length:', text.length, 'preview:', text.slice(0, 200));
+      // Try to extract accounts from a decompressed XML text.
+      // Returns array of accounts (possibly empty if this is the schema stream).
+      const TYPE_MAP = { A: 'bank', B: 'bank', S: 'brokerage', M: 'mf', Z: 'other', C: 'other' };
+      const ns = 'http://www.fincen.gov/bsa/ffbar/2011-06-01';
 
-        // The XFA XML uses newlines before > in tags, e.g. <ffbar:FinInstName\n>value</ffbar:FinInstName\n>
-        // Normalize to standard single-line tags so DOMParser handles them reliably
+      function xget(el, localName) {
+        const byNS = el.getElementsByTagNameNS(ns, localName);
+        if (byNS.length) return byNS[0].textContent?.trim() || '';
+        const byPfx = el.getElementsByTagName('ffbar:' + localName);
+        if (byPfx.length) return byPfx[0].textContent?.trim() || '';
+        const byBare = el.getElementsByTagName(localName);
+        if (byBare.length) return byBare[0].textContent?.trim() || '';
+        return '';
+      }
+
+      function tryExtractFromText(text) {
+        // Normalize newlines before > so DOMParser handles tags like <ffbar:FinInstName\n>
         const normalized = text.replace(/(\w)\n>/g, '$1>');
-
-        // Parse the XML
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(normalized, 'text/xml');
-
-        // FinCEN 114 AccountType codes: A=deposit account, B=bank/securities, S=securities, M=mutual fund, Z=other
-        const TYPE_MAP = { A: 'bank', B: 'bank', S: 'brokerage', M: 'mf', Z: 'other', C: 'other' };
+        const doc = new DOMParser().parseFromString(normalized, 'text/xml');
         const accounts = [];
-
-        const ns = 'http://www.fincen.gov/bsa/ffbar/2011-06-01';
-        function xget(el, localName) {
-          const byNS = el.getElementsByTagNameNS(ns, localName);
-          if (byNS.length) return byNS[0].textContent?.trim() || '';
-          const byPfx = el.getElementsByTagName('ffbar:' + localName);
-          if (byPfx.length) return byPfx[0].textContent?.trim() || '';
-          const byBare = el.getElementsByTagName(localName);
-          if (byBare.length) return byBare[0].textContent?.trim() || '';
-          return '';
-        }
         for (const tag of ['FinAcctOwnedSeparately', 'FinAcctOwnedJointly', 'FinAcctSigAuth']) {
           const ownership = tag === 'FinAcctOwnedSeparately' ? 'sole'
-                          : tag === 'FinAcctOwnedJointly'    ? 'joint'
-                          : 'sigauth';
+                          : tag === 'FinAcctOwnedJointly'    ? 'joint' : 'sigauth';
           const els = doc.getElementsByTagNameNS(ns, tag).length
             ? doc.getElementsByTagNameNS(ns, tag)
             : doc.getElementsByTagName('ffbar:' + tag);
           for (const el of els) {
             const name = xget(el, 'FinInstName');
-            const num  = xget(el, 'AccntNumber');
-            const typ  = xget(el, 'AccountType');
-            const maxv = parseFloat(xget(el, 'MaximumAccntValue') || '0');
             if (!name) continue;
+            const num    = xget(el, 'AccntNumber');
+            const typ    = xget(el, 'AccountType');
+            const maxv   = parseFloat(xget(el, 'MaximumAccntValue') || '0');
             const digits = num.replace(/\D/g, '');
-            const last4 = digits.length >= 4 ? digits.slice(-4) : (digits || num.slice(-4));
-
-            // Joint owner info
+            const last4  = digits.length >= 4 ? digits.slice(-4) : (digits || num.slice(-4));
             let joint_owner = null;
             if (ownership === 'joint') {
               const nOwners = xget(el, 'NOofJointOwners');
-              // Try to get principal joint owner name
               const joEls = el.getElementsByTagNameNS(ns, 'PrincipalJointOwner').length
                 ? el.getElementsByTagNameNS(ns, 'PrincipalJointOwner')
                 : el.getElementsByTagName('ffbar:PrincipalJointOwner');
               let ownerName = '';
               if (joEls.length) {
                 const jo = joEls[0];
-                const first = xget(jo, 'FirstName'), last = xget(jo, 'LastName');
-                ownerName = [first, last].filter(Boolean).join(' ');
+                ownerName = [xget(jo, 'FirstName'), xget(jo, 'LastName')].filter(Boolean).join(' ');
               }
-              joint_owner = ownerName
-                ? ownerName
-                : (nOwners ? `${nOwners} joint owner(s), name not on file` : null);
+              joint_owner = ownerName || (nOwners ? `${nOwners} joint owner(s), name not on file` : null);
             }
-
             accounts.push({
               institution_name: name,
               account_number: last4 ? `****${last4}` : num || '????',
               account_type: TYPE_MAP[typ] || 'other',
-              ownership,
-              joint_owner,
-              max_value_usd: maxv,
-              year_end_value_usd: maxv,
-              currency: 'INR',
+              ownership, joint_owner,
+              max_value_usd: maxv, year_end_value_usd: maxv, currency: 'INR',
             });
           }
         }
-        console.log('[tax-agent] XFA extracted accounts:', accounts.length, accounts);
         return accounts;
       }
-      console.log(`[tax-agent] XFA: done — schema streams: ${xfaSchemaCount}, data streams: ${xfaDataCount}, total streams: ${chunks.length}`);
+
+      // Scan all streams — try to parse every one that mentions the BSA form.
+      // Return accounts from the first stream that yields non-empty results.
+      // This avoids fragile schema-vs-data heuristics.
+      console.log(`[tax-agent] XFA: scanning ${chunks.length} streams`);
+      for (let si = 0; si < chunks.length; si++) {
+        const chunk = chunks[si];
+        const text = await tryDecompress(chunk);
+        if (!text) { console.log(`[tax-agent] XFA: stream ${si} decompression failed (size ${chunk.length})`); continue; }
+        if (!text.includes('ffbar:BSAForm')) continue;
+        const accounts = tryExtractFromText(text);
+        console.log(`[tax-agent] XFA: stream ${si} length ${text.length} → ${accounts.length} accounts`);
+        if (accounts.length > 0) return accounts;
+      }
+      console.log('[tax-agent] XFA: no accounts found in any stream');
       return null; // null = not an XFA FBAR, fall through to Gemini
     }
 
