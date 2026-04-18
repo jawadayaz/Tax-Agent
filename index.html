@@ -495,7 +495,7 @@
             errors.push(`${fmt}(${data === chunk ? 'raw' : 'strip2'}): ${e.message}`);
           }
         }
-        if (errors.length) console.warn('[tax-agent] XFA decompress failed:', errors.join('; '));
+        // errors suppressed — non-deflate streams (images, fonts) are expected
         return null;
       }
 
@@ -605,7 +605,7 @@
       for (let si = 0; si < chunks.length; si++) {
         const chunk = chunks[si];
         const text = await tryDecompress(chunk);
-        if (!text) { console.log(`[tax-agent] XFA: stream ${si} decompression failed (size ${chunk.length})`); continue; }
+        if (!text) continue; // non-deflate stream (image/font/etc.) — ignore silently
         if (!text.includes('ffbar:BSAForm')) continue;
         const accounts = tryExtractFromText(text);
         console.log(`[tax-agent] XFA: stream ${si} length ${text.length} → ${accounts.length} accounts`);
