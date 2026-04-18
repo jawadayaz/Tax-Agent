@@ -657,43 +657,44 @@ Only JSON, no explanation.`, file);
     async function parseStatement(file, apiKey) {
       // Returns an array of accounts (CAS statements can contain many)
       const result = await callGemini(apiKey,
-        `This is a financial document from India — it may be a bank statement, brokerage statement, mutual fund statement, CAS (Consolidated Account Statement), demat statement, or portfolio manager report.
+        `You are extracting FBAR-reportable financial ACCOUNTS from an Indian financial document.
 
-Your job: extract FBAR-reportable financial ACCOUNTS (not individual securities or holdings within an account).
+CRITICAL RULE: You are extracting ACCOUNTS, not HOLDINGS. An account is the container. Holdings are what's inside the container.
 
-KEY DISTINCTION — what is an "account" for FBAR:
-- A bank savings/current account → 1 account entry
-- A brokerage/demat account (e.g. Zerodha, HDFC Securities) → 1 account entry for the DEMAT ACCOUNT ITSELF
-- A mutual fund folio at an AMC (e.g. Aditya Birla folio 1044313728) → 1 account entry per AMC
-- A PMS or advisory portfolio → 1 account entry for the portfolio account
+WHAT IS AN ACCOUNT (extract these):
+- Bank savings/current/FD account → 1 entry, institution = bank name
+- Demat account at a depository participant (Zerodha, HDFC Securities, Angel One, ICICI Direct…) → 1 entry, institution = broker name, account_number = last 4 of BO client ID
+- Mutual fund folio at an AMC → 1 entry per AMC (e.g. "Aditya Birla Sun Life MF"), account_number = last 4 of folio number
+- PMS / advisory portfolio (Itus Capital, Motilal Oswal PMS…) → 1 entry per portfolio account
 
-NEVER create entries for:
-- Individual stocks, bonds, or ETFs held inside a demat account (these are holdings, not accounts)
-- Schemes/sub-funds within one AMC folio (aggregate by AMC, not by scheme)
-- Platforms/aggregators: CAMS, KFintech, NSDL, CDSL, MF Central, Wealth-Spectrum, NJ Wealth, Prudent — these are NOT account holders
+WHAT IS NOT AN ACCOUNT (never extract these):
+- Infosys, Reliance, TCS, HDFC Bank, any company stock → these are HOLDINGS inside a demat account
+- Nifty 50 ETF, SBI Bluechip Fund, Axis Midcap → these are SCHEMES inside a folio (aggregate by AMC)
+- ISIN numbers, NSE/BSE symbols, scrip codes → holdings, not accounts
+- CAMS, KFintech, NSDL, CDSL, MF Central, Wealth-Spectrum, NJ Wealth, Prudent → aggregators/platforms, not account holders
 
-For NSDL/CDSL CAS or demat statements: extract only the DEMAT ACCOUNT (DP ID + Client ID as account_number), not the individual securities listed inside it.
-For a mutual fund CAS: one entry per AMC. Sum all scheme values under that AMC into one folio entry.
-For a portfolio manager report (e.g. Itus Capital): extract the underlying AMC folios or accounts being reported, NOT "Itus Capital" itself as the account holder.
+EXAMPLES:
+- Zerodha demat holds Infosys, TCS, Wipro → return ONE entry: {"institution_name":"Zerodha","account_type":"brokerage"…}
+- ABSLMF folio has Frontline Equity, Liquid Fund, Tax Saver → return ONE entry: {"institution_name":"Aditya Birla Sun Life MF","account_type":"mf"…}
+- NSDL CAS showing multiple demat accounts → ONE entry per demat BO account (not per stock)
+- Itus Capital report showing ABSLMF and Mirae folios → return the individual AMC folio entries, NOT "Itus Capital"
 
-Return JSON array:
-[{"institution_name":"string","account_number":"string (last 4 chars of account/folio/DP-client-ID)","account_type":"bank|brokerage|mf|other","currency":"INR","peak_balance_inr":number,"year_end_balance_inr":number,"statement_year":number,"source_type":"bank|brokerage|cas_demat|cas_mf|portfolio_manager"}]
+Return JSON array only (no markdown, no explanation):
+[{"institution_name":"canonical name","account_number":"****XXXX","account_type":"bank|brokerage|mf|other","currency":"INR","peak_balance_inr":number,"year_end_balance_inr":number,"statement_year":number,"source_type":"bank|brokerage|cas_demat|cas_mf|portfolio_manager"}]
 
-Rules:
-- institution_name: the bank, broker, or AMC name. Use canonical names (e.g. "Aditya Birla Sun Life MF" not "ABSLMF")
-- account_number: last 4 chars only, prefixed with ****
-- peak_balance_inr: highest total value during the period (for MF: sum of all schemes)
-- year_end_balance_inr: Dec 31 value, or latest available
-- source_type: "cas_demat" if this came from a demat CAS, "cas_mf" if mutual fund CAS, "portfolio_manager" if via advisor/PMS
-- Return [] if not a financial statement
-Only JSON array, no explanation.`, file);
-      if (Array.isArray(result)) return result;
-      if (Array.isArray(result.accounts)) return result.accounts;
-      const firstArray = Object.values(result).find(v => Array.isArray(v));
-      if (firstArray) return firstArray;
-      // Single-account response wrapped as object
-      if (result.institution_name) return [result];
-      return [];
+- account_number: last 4 chars of account/folio/client-ID, prefixed ****
+- peak_balance_inr: highest total portfolio value in the period
+- year_end_balance_inr: Dec 31 value or latest available
+- Return [] if document is not a financial statement`, file);
+      let accounts = [];
+      if (Array.isArray(result)) accounts = result;
+      else if (Array.isArray(result.accounts)) accounts = result.accounts;
+      else {
+        const firstArray = Object.values(result).find(v => Array.isArray(v));
+        if (firstArray) accounts = firstArray;
+        else if (result.institution_name) accounts = [result];
+      }
+      return filterHoldings(accounts);
     }
 
     // Canonical aliases: maps common variants to a single normalised key
@@ -723,6 +724,33 @@ Only JSON array, no explanation.`, file);
       if (!clean) return '****????';
       const last4 = clean.slice(-4);
       return `****${last4}`;
+    }
+
+    // Known Indian listed companies / ETFs / scheme keywords that should never appear as institution_name.
+    // Gemini sometimes returns individual holdings as accounts despite the prompt — filter them out.
+    const HOLDING_KEYWORDS = [
+      'infosys','tcs','wipro','reliance','hdfc bank','icici bank','itc','bajaj',
+      'bharti airtel','airtel','larsen','l&t','maruti','asian paints','hul','hindustan unilever',
+      'kotak mahindra bank','axis bank','ultratech','nestle','sun pharma','titan',
+      'nifty','sensex','bse','nse','etf','index fund','direct plan','regular plan',
+      'growth','dividend','bluechip','midcap','smallcap','flexicap','flexi cap',
+      'liquid fund','overnight fund','debt fund','gilt','banking & psu',
+      'isin','in000','nse:','bse:','scrip',
+    ];
+    function isLikelyHolding(name) {
+      const n = (name || '').toLowerCase();
+      return HOLDING_KEYWORDS.some(k => n.includes(k));
+    }
+
+    function filterHoldings(accounts) {
+      return accounts.filter(a => {
+        if (!a.institution_name) return false;
+        if (isLikelyHolding(a.institution_name)) {
+          console.log('[tax-agent] filtered holding:', a.institution_name);
+          return false;
+        }
+        return true;
+      });
     }
 
     function matchAccounts(priorAccounts, scannedList, fxRate) {
@@ -1810,6 +1838,21 @@ Only JSON array, no explanation.`, file);
           <div className="actions">
             <button className="btn-primary" onClick={onNext}>Proceed to confirm →</button>
             <button className="btn-ghost" onClick={approveAllMatched}>Approve all matched</button>
+            <button className="btn-ghost" onClick={() => {
+              const rows = accounts.map(a => ({
+                institution: a.name, account_number: a.number, type: a.type,
+                ownership: a.ownership || '', joint_owner: a.joint_owner || '',
+                currency: a.currency || 'INR', fxRate,
+                prior_max_usd: a.priorMax, prior_year_end_usd: a.priorYearEnd,
+                new_max_usd: a.newMax, new_year_end_usd: a.newYearEnd,
+                status: a.status, source: a.source || ''
+              }));
+              const blob = new Blob([JSON.stringify({ taxYear, fxRate, accounts: rows }, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a2 = document.createElement('a');
+              a2.href = url; a2.download = `FBAR_${taxYear}_review.json`; a2.click();
+              URL.revokeObjectURL(url);
+            }}>Download JSON</button>
             <button className="btn-secondary" onClick={onBack} style={{marginLeft:'auto'}}>← Re-scan</button>
             <span className="fx-note">INR → USD · Dec 31 ₹{fxRate.toFixed(2)}/$1</span>
           </div>
