@@ -1,0 +1,2288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Tax Agent — FBAR</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #ffffff; --bg2: #f7f7f5; --bg3: #f0efe9;
+      --text: #1a1a18; --text2: #6b6b66; --text3: #9c9a92;
+      --border: rgba(0,0,0,0.1); --border2: rgba(0,0,0,0.18);
+      --blue: #378ADD; --blue-bg: #E6F1FB; --blue-text: #0C447C; --blue-border: #85B7EB;
+      --green-bg: #EAF3DE; --green-text: #27500A; --green-border: #97C459;
+      --amber-bg: #FAEEDA; --amber-text: #633806; --amber-border: #EF9F27;
+      --red-bg: #FCEBEB; --red-text: #791F1F; --red-border: #F09595;
+      --radius: 8px; --radius-lg: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    body { background: var(--bg3); min-height: 100vh; padding: 24px; }
+    .shell { background: var(--bg); border: 0.5px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; max-width: 1100px; margin: 0 auto; }
+
+    /* topbar */
+    .topbar { padding: 11px 20px; border-bottom: 0.5px solid var(--border); display: flex; align-items: center; gap: 12px; }
+    .logo { font-size: 14px; font-weight: 500; color: var(--text); white-space: nowrap; }
+    .logo span { color: var(--text3); font-weight: 400; }
+    .steps { display: flex; align-items: center; margin: 0 auto; }
+    .step { display: flex; align-items: center; gap: 6px; padding: 4px 12px; font-size: 12px; color: var(--text3); border-radius: 20px; white-space: nowrap; }
+    .step.active { color: var(--text); background: var(--bg2); font-weight: 500; }
+    .step.done { color: var(--text3); cursor: pointer; }
+    .step.done:hover { color: var(--text2); background: var(--bg2); }
+    .step-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.35; flex-shrink: 0; }
+    .step.active .step-dot { opacity: 1; background: var(--blue); }
+    .step.done .step-dot { opacity: 0.25; }
+    .step-div { width: 16px; height: 0.5px; background: var(--border); flex-shrink: 0; }
+    .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--blue-bg); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 500; color: var(--blue-text); flex-shrink: 0; }
+    .badge { background: var(--blue-bg); color: var(--blue-text); border: 0.5px solid var(--blue-border); border-radius: var(--radius); padding: 3px 10px; font-size: 12px; white-space: nowrap; }
+
+    /* forms */
+    .main { padding: 28px 32px; max-width: 580px; }
+    .page-title { font-size: 18px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
+    .page-sub { font-size: 13px; color: var(--text2); margin-bottom: 24px; line-height: 1.5; }
+    .section-label { font-size: 11px; font-weight: 500; color: var(--text3); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+    .divider { border: none; border-top: 0.5px solid var(--border); margin: 22px 0; }
+    label { font-size: 13px; color: var(--text2); display: block; margin-bottom: 6px; }
+    input[type=text], input[type=date], input[type=number] { width: 100%; padding: 8px 10px; border: 0.5px solid var(--border2); border-radius: var(--radius); font-size: 13px; color: var(--text); background: var(--bg); outline: none; }
+    input[type=text]:focus, input[type=date]:focus, input[type=number]:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(55,138,221,0.12); }
+    .field-hint { font-size: 11px; color: var(--text3); margin-top: 4px; }
+    .field-row { margin-bottom: 16px; }
+    .field-group { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    .upload-zone { border: 0.5px dashed var(--border2); border-radius: var(--radius); padding: 20px; text-align: center; background: var(--bg2); }
+    .upload-zone.has-file { border-color: var(--green-border); background: var(--green-bg); }
+    .upload-zone p { font-size: 13px; color: var(--text2); margin-bottom: 4px; }
+    .upload-zone small { font-size: 12px; color: var(--text3); }
+    .upload-btns { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
+    .upload-filename { font-size: 12px; color: var(--green-text); font-weight: 500; margin-top: 6px; }
+
+    .privacy-note { background: var(--bg2); border-radius: var(--radius); padding: 10px 12px; font-size: 12px; color: var(--text2); line-height: 1.5; margin-bottom: 14px; }
+
+    .source-card { border: 0.5px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .source-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 0.5px solid var(--border); }
+    .source-row:last-child { border-bottom: none; }
+    .source-name { font-size: 13px; color: var(--text); }
+    .source-sub { font-size: 12px; color: var(--text3); margin-top: 2px; }
+    .toggle { width: 32px; height: 18px; background: var(--border2); border-radius: 9px; position: relative; cursor: pointer; flex-shrink: 0; border: none; padding: 0; }
+    .toggle.on { background: var(--blue); }
+    .toggle-thumb { width: 14px; height: 14px; background: #fff; border-radius: 50%; position: absolute; top: 2px; left: 2px; transition: left .15s; }
+    .toggle.on .toggle-thumb { left: 16px; }
+
+    /* buttons */
+    .btn-primary { background: var(--text); color: #fff; border: none; border-radius: var(--radius); padding: 9px 20px; font-size: 13px; font-weight: 500; cursor: pointer; }
+    .btn-primary:hover { opacity: 0.85; }
+    .btn-secondary { background: transparent; color: var(--text2); border: 0.5px solid var(--border2); border-radius: var(--radius); padding: 9px 20px; font-size: 13px; cursor: pointer; }
+    .btn-secondary:hover { background: var(--bg2); }
+    .btn-ghost { background: transparent; color: var(--text3); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 8px 14px; font-size: 12px; cursor: pointer; }
+    .btn-ghost:hover { background: var(--bg2); }
+    .actions { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; align-items: center; }
+
+    /* pills */
+    .pill { display: inline-flex; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 500; border: 0.5px solid; white-space: nowrap; }
+    .pill-green { background: var(--green-bg); color: var(--green-text); border-color: var(--green-border); }
+    .pill-amber { background: var(--amber-bg); color: var(--amber-text); border-color: var(--amber-border); }
+    .pill-red { background: var(--red-bg); color: var(--red-text); border-color: var(--red-border); }
+    .pill-blue { background: var(--blue-bg); color: var(--blue-text); border-color: var(--blue-border); }
+    .pill-gray { background: var(--bg2); color: var(--text3); border-color: var(--border); }
+    .chip { font-size: 10px; color: var(--text3); background: var(--bg2); padding: 2px 6px; border-radius: 20px; border: 0.5px solid var(--border); }
+
+    /* scan screen */
+    .scan-main { padding: 32px; max-width: 520px; }
+    .scan-list { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
+    .scan-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 0.5px solid var(--border); border-radius: var(--radius); background: var(--bg2); font-size: 13px; color: var(--text2); }
+    .scan-item.done { color: var(--green-text); background: var(--green-bg); border-color: var(--green-border); }
+    .scan-item.active { color: var(--text); background: var(--bg); border-color: var(--blue-border); }
+    .scan-item.error { color: var(--red-text); background: var(--red-bg); border-color: var(--red-border); }
+    .scan-icon { width: 16px; height: 16px; flex-shrink: 0; }
+    .scan-stats { display: flex; gap: 16px; padding: 12px 14px; background: var(--bg2); border-radius: var(--radius); font-size: 12px; color: var(--text2); margin-top: 16px; }
+    .scan-stat-val { font-weight: 600; color: var(--text); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { animation: spin .8s linear infinite; display: inline-block; }
+
+    /* review table */
+    .review-main { padding: 20px 24px; }
+    .top-row { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; gap: 16px; flex-wrap: wrap; }
+    .stat-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .stat { background: var(--bg2); border-radius: var(--radius); padding: 8px 14px; display: flex; align-items: baseline; gap: 6px; }
+    .stat-val { font-size: 16px; font-weight: 500; }
+    .stat-label { font-size: 11px; color: var(--text3); }
+    .tbl-outer { border: 0.5px solid var(--border); border-radius: var(--radius); overflow-x: auto; }
+    table { border-collapse: collapse; font-size: 12px; white-space: nowrap; width: 100%; }
+    thead tr:first-child th { background: var(--bg2); }
+    thead tr:last-child th { background: var(--bg2); border-bottom: 0.5px solid var(--border); }
+    th { padding: 7px 10px; text-align: left; font-size: 10px; font-weight: 500; color: var(--text2); }
+    th.r { text-align: right; }
+    th.prior { border-left: 0.5px solid var(--border); text-align: center; color: var(--text3); }
+    th.new-grp { border-left: 0.5px solid var(--border); text-align: center; }
+    th.sub-prior { border-left: 0.5px solid var(--border); text-align: right; color: var(--text3); }
+    th.sub-prior-r { text-align: right; color: var(--text3); }
+    th.sub-new { border-left: 0.5px solid var(--border); text-align: right; }
+    th.sub-new-r { text-align: right; }
+    td { padding: 8px 10px; border-bottom: 0.5px solid var(--border); color: var(--text); vertical-align: middle; }
+    td.r { text-align: right; font-variant-numeric: tabular-nums; }
+    td.mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; color: var(--text2); }
+    td.muted { color: var(--text3); text-align: right; font-variant-numeric: tabular-nums; }
+    td.pb { border-left: 0.5px solid var(--border); }
+    td.nb { border-left: 0.5px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: color-mix(in srgb, var(--bg2) 60%, transparent); }
+    tr.row-review td { background: color-mix(in srgb, var(--amber-bg) 20%, transparent); }
+    tr.row-new td { background: color-mix(in srgb, var(--blue-bg) 18%, transparent); }
+    tr.row-missing td { background: color-mix(in srgb, var(--red-bg) 12%, transparent); }
+    tr.row-closed td { opacity: 0.5; }
+    tr.row-review:hover td, tr.row-new:hover td, tr.row-missing:hover td { filter: brightness(.97); }
+    .edit-cell { color: var(--text); background: transparent; border: none; width: 82px; font-size: 12px; font-family: inherit; outline: none; text-align: right; font-variant-numeric: tabular-nums; }
+    .edit-cell:focus { background: var(--blue-bg); border-radius: 3px; padding: 1px 4px; }
+    .edit-cell::placeholder { color: var(--text3); font-size: 11px; }
+    .type-change { display: flex; align-items: center; gap: 4px; }
+    .type-old { text-decoration: line-through; color: var(--text3); font-size: 11px; }
+    .fx-note { font-size: 11px; color: var(--text3); margin-left: auto; }
+
+    /* chat */
+    .chat-area { display: flex; flex-direction: column; height: 600px; }
+    .chat-scroll { flex: 1; padding: 20px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+    .msg-agent { max-width: 82%; }
+    .msg-user { max-width: 70%; align-self: flex-end; }
+    .agent-label { font-size: 11px; color: var(--text3); margin-bottom: 5px; font-weight: 500; }
+    .user-label { font-size: 11px; color: var(--text3); margin-bottom: 5px; text-align: right; }
+    .bubble-agent { background: var(--bg2); border-radius: 0 var(--radius-lg) var(--radius-lg) var(--radius-lg); padding: 12px 14px; font-size: 13px; color: var(--text); line-height: 1.6; }
+    .bubble-user { background: var(--text); color: #fff; border-radius: var(--radius-lg) 0 var(--radius-lg) var(--radius-lg); padding: 12px 14px; font-size: 13px; line-height: 1.6; }
+    .summary-card { background: var(--bg); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-top: 10px; font-size: 12px; }
+    .summary-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 0.5px solid var(--border); gap: 12px; }
+    .summary-row:last-child { border-bottom: none; }
+    .s-name { color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .s-muted { color: var(--text3); font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .btn-action { background: var(--bg); color: var(--text); border: 0.5px solid var(--border2); border-radius: var(--radius); padding: 6px 14px; font-size: 12px; cursor: pointer; }
+    .btn-action:hover { background: var(--bg2); }
+    .btn-action.primary { background: var(--text); color: #fff; border-color: transparent; }
+    .btn-action.primary:hover { opacity: 0.85; }
+    .memory-note { font-size: 11px; color: var(--text3); background: var(--bg2); border-radius: var(--radius); padding: 4px 10px; margin-top: 8px; display: inline-block; border: 0.5px solid var(--border); }
+    .chat-input-bar { padding: 12px 16px; border-top: 0.5px solid var(--border); display: flex; gap: 10px; align-items: center; }
+    .chat-input-bar input { flex: 1; padding: 8px 10px; border: 0.5px solid var(--border2); border-radius: var(--radius); font-size: 13px; outline: none; background: var(--bg); color: var(--text); }
+    .chat-input-bar input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(55,138,221,0.12); }
+    .send-btn { background: var(--text); color: #fff; border: none; border-radius: var(--radius); padding: 8px 16px; font-size: 13px; cursor: pointer; }
+    .send-btn:hover { opacity: 0.85; }
+    .manual-input-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+    .manual-input-row input { width: 140px; padding: 6px 10px; border: 0.5px solid var(--blue-border); border-radius: var(--radius); font-size: 12px; outline: none; background: var(--blue-bg); }
+
+    /* nav back */
+    .nav-back { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text3); background: none; border: none; cursor: pointer; padding: 0; margin-bottom: 16px; }
+    .nav-back:hover { color: var(--text2); }
+    /* demo banner */
+    .demo-banner { background: var(--amber-bg); border: 0.5px solid var(--amber-border); border-radius: var(--radius); padding: 8px 12px; font-size: 12px; color: var(--amber-text); margin-bottom: 16px; line-height: 1.5; }
+    /* export */
+    .export-main { padding: 28px 32px; max-width: 560px; }
+    .export-summary { background: var(--bg2); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 20px; }
+    .export-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 0.5px solid var(--border); font-size: 13px; }
+    .export-row:last-child { border-bottom: none; }
+    .export-label { color: var(--text2); }
+    .export-val { font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
+    .warning-banner { background: var(--amber-bg); border: 0.5px solid var(--amber-border); border-radius: var(--radius); padding: 10px 14px; font-size: 12px; color: var(--amber-text); margin-bottom: 16px; line-height: 1.5; }
+    .filing-steps { font-size: 13px; color: var(--text2); line-height: 2; }
+    .filing-steps li { list-style: none; padding-left: 20px; position: relative; }
+    .filing-steps li::before { content: '→'; position: absolute; left: 0; color: var(--text3); }
+    .version-footer { font-size: 11px; color: var(--text3); margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://accounts.google.com/gsi/client" async></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel" data-presets="react">
+    const APP_VERSION = 'v1.02';
+    const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    const STEPS = ['setup', 'scan', 'review', 'confirm', 'export'];
+    const STEP_LABELS = ['Setup', 'Scan', 'Review', 'Confirm', 'Export'];
+
+    const TYPE_LABELS = { bank: 'Bank', brokerage: 'Brokerage', mf: 'MF', other: 'Other' };
+
+    const DEMO_ACCOUNTS = [
+      { id:'1', name:'HDFC Bank savings', number:'****4821', type:'bank', currency:'INR', priorMax:12440, priorYearEnd:10900, newMax:13100, newYearEnd:11200, status:'matched', source:'email PDF' },
+      { id:'2', name:'Zerodha trading', number:'****3301', type:'brokerage', currency:'INR', priorMax:44100, priorYearEnd:39200, newMax:47200, newYearEnd:38750, status:'matched', source:'email XLS' },
+      { id:'3', name:'Groww MF', number:'****8812', type:'mf', currency:'INR', priorMax:18300, priorYearEnd:17100, newMax:21500, newYearEnd:19600, status:'matched', source:'email PDF' },
+      { id:'4', name:'HDFC FD', number:'****2290', type:'bank', currency:'INR', priorMax:8100, priorYearEnd:8100, newMax:8100, newYearEnd:8100, status:'matched', source:'email PDF' },
+      { id:'5', name:'SBI savings', number:'****7001', type:'bank', currency:'INR', priorMax:3200, priorYearEnd:3100, newMax:3400, newYearEnd:3200, status:'matched', source:'Drive PDF' },
+      { id:'6', name:'NSDL CAS', number:'****5544', type:'brokerage', currency:'INR', priorMax:22000, priorYearEnd:20800, newMax:24100, newYearEnd:21400, status:'matched', source:'email PDF' },
+      { id:'7', name:'Zerodha demat', number:'****9910', type:'brokerage', priorType:'mf', currency:'INR', priorMax:9500, priorYearEnd:9100, newMax:11200, newYearEnd:10800, status:'review', reviewReason:'type_change', source:'email XLS' },
+      { id:'8', name:'Kotak Bank', number:'****6630', type:'bank', currency:'INR', priorMax:null, priorYearEnd:null, newMax:null, newYearEnd:4200, status:'new', source:'email PDF' },
+      { id:'9', name:'ICICI FD', number:'****7744', type:'bank', currency:'INR', priorMax:6800, priorYearEnd:6800, newMax:null, newYearEnd:null, status:'missing', source:null },
+    ];
+
+    // ─── Gemini helpers ───────────────────────────────────────────────────────
+    function readFileAsBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // fileInput: File object OR { data: base64string, mimeType: string, name?: string }
+    async function callGemini(apiKey, promptText, fileInput) {
+      const parts = [];
+      if (fileInput) {
+        let b64, mimeType;
+        if (fileInput instanceof File) {
+          b64 = await readFileAsBase64(fileInput);
+          mimeType = fileInput.type ||
+            (fileInput.name.endsWith('.pdf') ? 'application/pdf' :
+             fileInput.name.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
+             fileInput.name.endsWith('.xls') ? 'application/vnd.ms-excel' : 'application/octet-stream');
+        } else {
+          // base64url from Gmail API → standard base64
+          b64 = (fileInput.data || '').replace(/-/g, '+').replace(/_/g, '/');
+          mimeType = fileInput.mimeType || 'application/pdf';
+        }
+        parts.push({ inlineData: { mimeType, data: b64 } });
+      }
+      parts.push({ text: promptText });
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts }],
+            generationConfig: { responseMimeType: 'application/json' }
+          })
+        }
+      );
+      if (!resp.ok) {
+        const err = await resp.text();
+        throw new Error(`Gemini ${resp.status}: ${err.slice(0, 200)}`);
+      }
+      const data = await resp.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error('Empty Gemini response');
+      return JSON.parse(text);
+    }
+
+    // ─── Gmail scan queries ────────────────────────────────────────────────────
+    // General-purpose financial statement detection queries.
+    // No institution names hardcoded — works for any user.
+    // Ordered roughly from highest-signal to broadest.
+    // Sender-based queries use confirmed real-world senders discovered from live mailbox analysis.
+    // Subject/filename-based queries catch any institution not in the sender list.
+    // CAMS (camsonline.com) and KFintech (kfintech.com) act as transfer agents for dozens of AMFs
+    // — a single from:camsonline.com query catches all of them for any user.
+    const STATEMENT_SCAN_QUERIES = [
+      // ── Tier 1: Confirmed sender domains — highest precision ──
+      // Banks
+      { name: 'HDFC Bank statements',       q: 'from:hdfcbank.net subject:statement' },          // hdfcbanksmartstatement@hdfcbank.net
+      { name: 'HDFC Bank demat',            q: 'from:Emailstatements.demat@hdfcbank.net' },
+      { name: 'ICICI Bank',                 q: 'from:icicibank.com subject:(statement OR account)' },
+      { name: 'Kotak Bank',                 q: 'from:kotak.com subject:(statement OR account)' },
+      { name: 'SBI',                        q: 'from:sbi.co.in subject:(statement OR account)' },
+      { name: 'Axis Bank',                  q: 'from:axisbank.com subject:(statement OR account)' },
+      { name: 'Yes Bank',                   q: 'from:yesbank.in OR from:casastmt@yesbank.in' },
+      { name: 'IndusInd Bank',              q: 'from:indusind.com subject:(statement OR account)' },
+      { name: 'RBL Bank',                   q: 'from:rblbank.com subject:(statement OR account)' },
+      // Brokerages / demat
+      { name: 'HDFC Securities',            q: 'from:hdfcsec.com' },                              // edocs@hdfcsec.com
+      { name: 'Zerodha',                    q: 'from:reportsmailer.zerodha.net' },
+      { name: 'ICICI Securities',           q: 'from:icicidirect.com' },
+      { name: 'Kotak Securities',           q: 'from:kotaksecurities.com' },
+      { name: 'Groww',                      q: 'from:groww.in subject:(statement OR portfolio OR holdings)' },
+      { name: 'Angel One',                  q: 'from:angelbroking.com OR from:angelone.in' },
+      { name: 'Upstox',                     q: 'from:upstox.com' },
+      { name: 'Sharekhan',                  q: 'from:sharekhan.com subject:(statement OR account)' },
+      // MF transfer agents — one query catches ALL AMFs they service
+      { name: 'NSDL CAS',                   q: 'from:NSDL-CAS@nsdl.co.in' },
+      { name: 'CAMS (all AMFs)',            q: 'from:camsonline.com has:attachment' },             // sends for ABSLMF, HDFC MF, SBI MF, etc.
+      { name: 'KFintech (all AMFs)',        q: 'from:kfintech.com has:attachment' },               // sends for Nippon, Mirae, UTI, etc.
+      { name: 'CDSL CAS',                   q: 'from:cdsl.com OR from:cdslindia.com subject:(CAS OR statement)' },
+      // ── Tier 2: Subject-based — catches any sender not above ──
+      { name: 'Account / bank statements',  q: 'subject:("account statement" OR "bank statement") has:attachment' },
+      { name: 'E-statements',               q: 'subject:("e-statement" OR "eStatement" OR "online statement") has:attachment' },
+      { name: 'Demat & holdings',           q: 'subject:(demat OR "DP statement" OR "holding statement" OR "depository statement") has:attachment' },
+      { name: 'Portfolio & valuation',      q: 'subject:("portfolio statement" OR "portfolio valuation" OR "investment report") has:attachment' },
+      { name: 'Consolidated (CAS)',         q: 'subject:("consolidated account statement" OR "CAS") has:attachment' },
+      { name: 'Mutual fund statements',     q: 'subject:("mutual fund statement" OR "MF statement" OR "folio statement") has:attachment' },
+      { name: 'Capital gains & P&L',        q: 'subject:("capital gains" OR "P&L" OR "profit and loss" OR "tax P&L") has:attachment' },
+      { name: 'Annual statements',          q: 'subject:("annual statement" OR "yearly statement" OR "year end") has:attachment' },
+      { name: 'Periodic statements',        q: 'subject:("monthly statement" OR "quarterly statement") has:attachment' },
+      // ── Tier 3: Filename-based — catches statements where subject gives no signal ──
+      { name: 'PDF: statement filename',    q: 'filename:statement has:attachment' },
+      { name: 'PDF: holdings filename',     q: 'filename:(holdings OR portfolio OR AccountStatement OR ledger) has:attachment' },
+      // ── Tier 4: Broad fallback — last resort ──
+      { name: 'All statements (broad)',     q: 'subject:statement has:attachment -subject:(credit card OR insurance OR recharge OR "bill payment" OR EMI OR invoice OR loan)' },
+    ];
+
+    function buildGmailQueries(_priorAccounts, taxYear) {
+      // Full year + 4-month buffer — year-end statements often arrive in Jan–Apr
+      const dateRange = `after:${taxYear}/01/01 before:${taxYear + 1}/05/01`;
+      return STATEMENT_SCAN_QUERIES.map(q => ({
+        name: q.name,
+        q: `${q.q} ${dateRange}`,
+        kind: 'scan',
+      }));
+    }
+
+    class GmailTokenExpiredError extends Error {
+      constructor() { super('Gmail token expired — please reconnect on the Setup screen'); this.name = 'GmailTokenExpiredError'; }
+    }
+
+    function gmailCheckStatus(r, label) {
+      if (r.status === 401) throw new GmailTokenExpiredError();
+      if (!r.ok) throw new Error(`${label} ${r.status}`);
+    }
+
+    async function gmailSearch(token, query, maxResults = 10) {
+      const url = `https://gmail.googleapis.com/gmail/v1/users/me/messages` +
+        `?q=${encodeURIComponent(query)}&maxResults=${maxResults}`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      gmailCheckStatus(r, 'Gmail search');
+      const d = await r.json();
+      return d.messages || [];
+    }
+
+    async function gmailGetMessage(token, msgId) {
+      const r = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=full`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      gmailCheckStatus(r, 'Gmail message');
+      return r.json();
+    }
+
+    async function gmailGetAttachment(token, msgId, attId) {
+      const r = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/attachments/${attId}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      gmailCheckStatus(r, 'Gmail attachment');
+      const d = await r.json();
+      return d.data; // base64url
+    }
+
+    const STATEMENT_MIME_TYPES = new Set([
+      'application/pdf',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/csv'
+    ]);
+
+    function extractAttachments(payload) {
+      const parts = [];
+      function walk(p) {
+        if (!p) return;
+        if (p.parts) p.parts.forEach(walk);
+        if (p.body?.attachmentId && STATEMENT_MIME_TYPES.has(p.mimeType)) {
+          parts.push({ attId: p.body.attachmentId, mimeType: p.mimeType, filename: p.filename || 'attachment' });
+        }
+      }
+      walk(payload);
+      return parts;
+    }
+
+    function gmailHeader(payload, name) {
+      return payload?.headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+    }
+
+    // Extract accounts directly from FinCEN XFA PDF (no AI needed)
+    async function extractXFAAccounts(file) {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+
+      // Decompress a Uint8Array using the browser Streams API
+      async function tryDecompress(chunk) {
+        // Build list of (format, data) attempts:
+        // 1. 'deflate' (zlib-wrapped) — standard PDF FlateDecode
+        // 2. 'deflate-raw' — raw deflate without zlib header
+        // 3. If chunk starts with zlib magic byte 0x78, strip the 2-byte zlib header and try deflate-raw
+        const attempts = [
+          ['deflate', chunk],
+          ['deflate-raw', chunk],
+        ];
+        if (chunk.length > 2 && chunk[0] === 0x78) {
+          attempts.push(['deflate-raw', chunk.slice(2)]);
+        }
+
+        const errors = [];
+        for (const [fmt, data] of attempts) {
+          try {
+            const inputStream = new ReadableStream({
+              start(c) { c.enqueue(data); c.close(); }
+            });
+            const reader = inputStream.pipeThrough(new DecompressionStream(fmt)).getReader();
+            const parts = [];
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              parts.push(value);
+            }
+            const out = new Uint8Array(parts.reduce((a, b) => a + b.length, 0));
+            let off = 0; parts.forEach(p => { out.set(p, off); off += p.length; });
+            return new TextDecoder('utf-8', { fatal: false }).decode(out);
+          } catch(e) {
+            errors.push(`${fmt}(${data === chunk ? 'raw' : 'strip2'}): ${e.message}`);
+          }
+        }
+        if (errors.length) console.warn('[tax-agent] XFA decompress failed:', errors.join('; '));
+        return null;
+      }
+
+      // Scan for stream...endstream blocks
+      function matchAt(arr, pos, marker) {
+        if (pos + marker.length > arr.length) return false;
+        for (let k = 0; k < marker.length; k++) if (arr[pos+k] !== marker[k]) return false;
+        return true;
+      }
+      // 'stream\n'   = [115,116,114,101,97,109,10]
+      // 'stream\r\n' = [115,116,114,101,97,109,13,10]
+      // 'endstream'  = [101,110,100,115,116,114,101,97,109]
+      const SM1 = [115,116,114,101,97,109,10];
+      const SM2 = [115,116,114,101,97,109,13,10];
+      const EM  = [101,110,100,115,116,114,101,97,109];
+
+      const chunks = [];
+      for (let i = 0; i < bytes.length - 10; i++) {
+        if (bytes[i] !== 115) continue; // fast pre-filter: 's'
+        let skip = 0;
+        if (matchAt(bytes, i, SM1)) skip = SM1.length;
+        else if (matchAt(bytes, i, SM2)) skip = SM2.length;
+        if (skip === 0) continue;
+        const start = i + skip;
+        let end = -1;
+        for (let j = start; j < bytes.length - 9; j++) {
+          if (bytes[j] === 101 && matchAt(bytes, j, EM)) { end = j; break; }
+        }
+        // Advance past the full 'endstream' keyword to avoid false-matching its
+        // embedded 'stream' on the next iteration (endstream[3..] = 'stream')
+        if (end > start) { chunks.push(bytes.slice(start, end)); i = end + EM.length - 1; }
+      }
+
+      // Find datasets XML among decompressed chunks
+      // The FinCEN PDF contains TWO xfa:datasets streams:
+      //   1. The schema/template (dd:dataDescription) — all empty self-closing elements
+      //   2. The data stream (<xfa:data> with real values) — this is the one we want
+      console.log(`[tax-agent] XFA: scanning ${chunks.length} streams`);
+      let xfaSchemaCount = 0, xfaDataCount = 0;
+      for (let si = 0; si < chunks.length; si++) {
+        const chunk = chunks[si];
+        const text = await tryDecompress(chunk);
+        if (!text) { console.log(`[tax-agent] XFA: stream ${si} — decompression failed (size ${chunk.length})`); continue; }
+        if (!text.includes('xfa:datasets') && !text.includes('ffbar:BSAForm') && !text.includes('xfa:data')) continue;
+        if (text.includes('dd:dataDescription')) { xfaSchemaCount++; console.log(`[tax-agent] XFA: stream ${si} — schema (skipped)`); continue; }
+        if (!text.includes('xfa:datasets') || !text.includes('ffbar:BSAForm')) { console.log(`[tax-agent] XFA: stream ${si} — xfa but not BSA form`); continue; }
+        xfaDataCount++;
+        console.log('[tax-agent] XFA: found data stream', si, 'length:', text.length, 'preview:', text.slice(0, 200));
+
+        // The XFA XML uses newlines before > in tags, e.g. <ffbar:FinInstName\n>value</ffbar:FinInstName\n>
+        // Normalize to standard single-line tags so DOMParser handles them reliably
+        const normalized = text.replace(/(\w)\n>/g, '$1>');
+
+        // Parse the XML
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(normalized, 'text/xml');
+
+        // FinCEN 114 AccountType codes: A=deposit account, B=bank/securities, S=securities, M=mutual fund, Z=other
+        const TYPE_MAP = { A: 'bank', B: 'bank', S: 'brokerage', M: 'mf', Z: 'other', C: 'other' };
+        const accounts = [];
+
+        const ns = 'http://www.fincen.gov/bsa/ffbar/2011-06-01';
+        function xget(el, localName) {
+          const byNS = el.getElementsByTagNameNS(ns, localName);
+          if (byNS.length) return byNS[0].textContent?.trim() || '';
+          const byPfx = el.getElementsByTagName('ffbar:' + localName);
+          if (byPfx.length) return byPfx[0].textContent?.trim() || '';
+          const byBare = el.getElementsByTagName(localName);
+          if (byBare.length) return byBare[0].textContent?.trim() || '';
+          return '';
+        }
+        for (const tag of ['FinAcctOwnedSeparately', 'FinAcctOwnedJointly', 'FinAcctSigAuth']) {
+          const ownership = tag === 'FinAcctOwnedSeparately' ? 'sole'
+                          : tag === 'FinAcctOwnedJointly'    ? 'joint'
+                          : 'sigauth';
+          const els = doc.getElementsByTagNameNS(ns, tag).length
+            ? doc.getElementsByTagNameNS(ns, tag)
+            : doc.getElementsByTagName('ffbar:' + tag);
+          for (const el of els) {
+            const name = xget(el, 'FinInstName');
+            const num  = xget(el, 'AccntNumber');
+            const typ  = xget(el, 'AccountType');
+            const maxv = parseFloat(xget(el, 'MaximumAccntValue') || '0');
+            if (!name) continue;
+            const digits = num.replace(/\D/g, '');
+            const last4 = digits.length >= 4 ? digits.slice(-4) : (digits || num.slice(-4));
+
+            // Joint owner info
+            let joint_owner = null;
+            if (ownership === 'joint') {
+              const nOwners = xget(el, 'NOofJointOwners');
+              // Try to get principal joint owner name
+              const joEls = el.getElementsByTagNameNS(ns, 'PrincipalJointOwner').length
+                ? el.getElementsByTagNameNS(ns, 'PrincipalJointOwner')
+                : el.getElementsByTagName('ffbar:PrincipalJointOwner');
+              let ownerName = '';
+              if (joEls.length) {
+                const jo = joEls[0];
+                const first = xget(jo, 'FirstName'), last = xget(jo, 'LastName');
+                ownerName = [first, last].filter(Boolean).join(' ');
+              }
+              joint_owner = ownerName
+                ? ownerName
+                : (nOwners ? `${nOwners} joint owner(s), name not on file` : null);
+            }
+
+            accounts.push({
+              institution_name: name,
+              account_number: last4 ? `****${last4}` : num || '????',
+              account_type: TYPE_MAP[typ] || 'other',
+              ownership,
+              joint_owner,
+              max_value_usd: maxv,
+              year_end_value_usd: maxv,
+              currency: 'INR',
+            });
+          }
+        }
+        console.log('[tax-agent] XFA extracted accounts:', accounts.length, accounts);
+        return accounts;
+      }
+      console.log(`[tax-agent] XFA: done — schema streams: ${xfaSchemaCount}, data streams: ${xfaDataCount}, total streams: ${chunks.length}`);
+      return null; // null = not an XFA FBAR, fall through to Gemini
+    }
+
+    async function parsePriorFBAR(file, apiKey) {
+      // Try direct XFA extraction first (works on FinCEN BSA PDFs without AI)
+      try {
+        const xfaAccounts = await extractXFAAccounts(file);
+        if (xfaAccounts && xfaAccounts.length > 0) return xfaAccounts;
+      } catch(e) { console.warn('XFA extraction failed:', e); }
+
+      // Fall back to Gemini for non-XFA PDFs
+      const result = await callGemini(apiKey,
+        `This is a FinCEN 114 (FBAR) form for a US person with foreign financial accounts.
+Extract every foreign financial account listed. Return JSON:
+{"accounts":[{"institution_name":"string","account_number":"****XXXX (last 4 only)","account_type":"bank|brokerage|mf|other","account_holder":"string","max_value_usd":number,"year_end_value_usd":number,"currency":"string","tax_year":number}]}
+Only JSON, no explanation.`, file);
+      console.log('[tax-agent] parsePriorFBAR Gemini result:', result);
+      if (Array.isArray(result)) return result;
+      if (Array.isArray(result.accounts)) return result.accounts;
+      const firstArray = Object.values(result).find(v => Array.isArray(v));
+      if (firstArray) return firstArray;
+      return [];
+    }
+
+    // Platform/aggregator names that are not actual account-holding institutions
+    const PLATFORM_BLOCKLIST = new Set([
+      'wealth-spectrum','wealthspectrum','mfcentral','mf central','cams','kfintech','karvy',
+      'nsdl','cdsl','bse starmf','mfutility','prudent','nj wealth','njwealth',
+      'consolidated','cas','statement'
+    ]);
+
+    function isSpuriousInstitution(name) {
+      const n = (name || '').toLowerCase().replace(/[\s\-_.]/g,'');
+      return PLATFORM_BLOCKLIST.has(n) || PLATFORM_BLOCKLIST.has(name.toLowerCase().trim());
+    }
+
+    async function parseStatement(file, apiKey) {
+      // Returns an array of accounts (CAS statements can contain many)
+      const result = await callGemini(apiKey,
+        `This is a financial document from India — it may be a bank statement, brokerage statement, mutual fund statement, CAS (Consolidated Account Statement), demat statement, or portfolio manager report.
+
+Your job: extract FBAR-reportable financial ACCOUNTS (not individual securities or holdings within an account).
+
+KEY DISTINCTION — what is an "account" for FBAR:
+- A bank savings/current account → 1 account entry
+- A brokerage/demat account (e.g. Zerodha, HDFC Securities) → 1 account entry for the DEMAT ACCOUNT ITSELF
+- A mutual fund folio at an AMC (e.g. Aditya Birla folio 1044313728) → 1 account entry per AMC
+- A PMS or advisory portfolio → 1 account entry for the portfolio account
+
+NEVER create entries for:
+- Individual stocks, bonds, or ETFs held inside a demat account (these are holdings, not accounts)
+- Schemes/sub-funds within one AMC folio (aggregate by AMC, not by scheme)
+- Platforms/aggregators: CAMS, KFintech, NSDL, CDSL, MF Central, Wealth-Spectrum, NJ Wealth, Prudent — these are NOT account holders
+
+For NSDL/CDSL CAS or demat statements: extract only the DEMAT ACCOUNT (DP ID + Client ID as account_number), not the individual securities listed inside it.
+For a mutual fund CAS: one entry per AMC. Sum all scheme values under that AMC into one folio entry.
+For a portfolio manager report (e.g. Itus Capital): extract the underlying AMC folios or accounts being reported, NOT "Itus Capital" itself as the account holder.
+
+Return JSON array:
+[{"institution_name":"string","account_number":"string (last 4 chars of account/folio/DP-client-ID)","account_type":"bank|brokerage|mf|other","currency":"INR","peak_balance_inr":number,"year_end_balance_inr":number,"statement_year":number,"source_type":"bank|brokerage|cas_demat|cas_mf|portfolio_manager"}]
+
+Rules:
+- institution_name: the bank, broker, or AMC name. Use canonical names (e.g. "Aditya Birla Sun Life MF" not "ABSLMF")
+- account_number: last 4 chars only, prefixed with ****
+- peak_balance_inr: highest total value during the period (for MF: sum of all schemes)
+- year_end_balance_inr: Dec 31 value, or latest available
+- source_type: "cas_demat" if this came from a demat CAS, "cas_mf" if mutual fund CAS, "portfolio_manager" if via advisor/PMS
+- Return [] if not a financial statement
+Only JSON array, no explanation.`, file);
+      if (Array.isArray(result)) return result;
+      if (Array.isArray(result.accounts)) return result.accounts;
+      const firstArray = Object.values(result).find(v => Array.isArray(v));
+      if (firstArray) return firstArray;
+      // Single-account response wrapped as object
+      if (result.institution_name) return [result];
+      return [];
+    }
+
+    // Canonical aliases: maps common variants to a single normalised key
+    const INST_ALIASES = {
+      'adityabirlasunlifemf': 'adityabirla', 'adityabirlasunlife': 'adityabirla',
+      'adityabirlacapital': 'adityabirla', 'abslmf': 'adityabirla', 'abcap': 'adityabirla',
+      'hdfcmutualfund': 'hdfcmf', 'hdfcmf': 'hdfcmf', 'hdfcamc': 'hdfcmf',
+      'sbimutualfund': 'sbimf', 'sbimf': 'sbimf',
+      'nipponindiamutalfund': 'nipponmf', 'nipponindiamf': 'nipponmf', 'reliancemf': 'nipponmf',
+      'iciciprumutualfund': 'iciciprudentialmf', 'iciciprudential': 'iciciprudentialmf',
+      'kotakmahindra': 'kotak', 'kotaksecurities': 'kotaksec',
+      'hdfcsecurities': 'hdfcsec', 'hdfcsec': 'hdfcsec',
+      'statebankofindia': 'sbi', 'statebankofind': 'sbi',
+      'yesbank': 'yesbank', 'yesbankltd': 'yesbank',
+      'citibank': 'citi', 'citibankna': 'citi',
+    };
+    function normInst(name) {
+      const base = (name || '').toLowerCase()
+        .replace(/[.\-_,]/g, ' ')
+        .replace(/\b(bank|ltd|limited|securities|broking|mutual fund|mf|amc|india|pvt|private|co)\b/g, '')
+        .replace(/\s+/g, '');
+      return INST_ALIASES[base] || base;
+    }
+
+    function normAccountNumber(raw) {
+      const clean = (raw || '').replace(/\*/g, '').trim();
+      if (!clean) return '****????';
+      const last4 = clean.slice(-4);
+      return `****${last4}`;
+    }
+
+    function matchAccounts(priorAccounts, scannedList, fxRate) {
+      const results = [];
+      const usedPrior = new Set();
+
+      for (const scanned of scannedList) {
+        const sLast4 = (scanned.account_number || '').replace(/\*/g,'').slice(-4);
+        const sNorm = normInst(scanned.institution_name);
+
+        let matchIdx = -1;
+        for (let i = 0; i < priorAccounts.length; i++) {
+          if (usedPrior.has(i)) continue;
+          const p = priorAccounts[i];
+          const pLast4 = (p.account_number || '').replace(/\*/g,'').slice(-4);
+          const pNorm = normInst(p.institution_name);
+          const numMatch = sLast4 && pLast4 && sLast4 === pLast4;
+          const nameMatch = sNorm.length >= 4 && pNorm.length >= 4 &&
+            (sNorm.startsWith(pNorm.slice(0,4)) || pNorm.startsWith(sNorm.slice(0,4)));
+          if (numMatch || nameMatch) { matchIdx = i; break; }
+        }
+
+        const newMax = Math.round((scanned.peak_balance_inr || 0) / fxRate);
+        const newYE = Math.round((scanned.year_end_balance_inr || 0) / fxRate);
+        const id = String(results.length + 1);
+
+        if (matchIdx >= 0) {
+          usedPrior.add(matchIdx);
+          const p = priorAccounts[matchIdx];
+          const typeChanged = p.account_type && scanned.account_type && p.account_type !== scanned.account_type;
+          results.push({
+            id, name: scanned.institution_name,
+            number: normAccountNumber(scanned.account_number || p.account_number),
+            type: scanned.account_type || p.account_type || 'other',
+            priorType: typeChanged ? p.account_type : undefined,
+            currency: 'INR',
+            ownership: p.ownership || null,
+            joint_owner: p.joint_owner || null,
+            priorMax: p.max_value_usd, priorYearEnd: p.year_end_value_usd,
+            newMax: newMax || null, newYearEnd: newYE || null,
+            status: typeChanged ? 'review' : 'matched',
+            reviewReason: typeChanged ? 'type_change' : undefined,
+            source: scanned._source || 'local file'
+          });
+        } else {
+          results.push({
+            id, name: scanned.institution_name,
+            number: normAccountNumber(scanned.account_number),
+            type: scanned.account_type || 'other', currency: 'INR',
+            ownership: null, joint_owner: null,
+            priorMax: null, priorYearEnd: null,
+            newMax: newMax || null, newYearEnd: newYE || null,
+            status: 'new', source: scanned._source || 'local file'
+          });
+        }
+      }
+
+      // Prior accounts with no match = missing
+      priorAccounts.forEach((p, i) => {
+        if (usedPrior.has(i)) return;
+        results.push({
+          id: String(results.length + 1),
+          name: p.institution_name, number: p.account_number || '****????',
+          type: p.account_type || 'other', currency: p.currency || 'INR',
+          ownership: p.ownership || null,
+          joint_owner: p.joint_owner || null,
+          priorMax: p.max_value_usd, priorYearEnd: p.year_end_value_usd,
+          newMax: null, newYearEnd: null, status: 'missing', source: null
+        });
+      });
+
+      return results;
+    }
+
+    function fmtUSD(val) {
+      if (val == null) return '—';
+      return '$' + Number(val).toLocaleString('en-US', { maximumFractionDigits: 0 });
+    }
+
+    function renderText(text) {
+      // Simple bold: **text**
+      const parts = text.split(/(\*\*[^*]+\*\*)/g);
+      return parts.map((p, i) =>
+        p.startsWith('**') ? <strong key={i}>{p.slice(2, -2)}</strong> : p
+      );
+    }
+
+    // ─── TopBar ───────────────────────────────────────────────────────────────
+    function TopBar({ step, taxYear, setTaxYear, initials, setStep }) {
+      const curIdx = STEPS.indexOf(step);
+      const thisYear = new Date().getFullYear();
+      const years = Array.from({ length: thisYear - 2018 }, (_, i) => thisYear - 1 - i);
+      return (
+        <div className="topbar">
+          <div className="logo">tax agent <span>/ FBAR</span></div>
+          <div className="steps">
+            {STEPS.map((s, i) => (
+              <React.Fragment key={s}>
+                {i > 0 && <div className="step-div"/>}
+                <div
+                  className={`step${i === curIdx ? ' active' : i < curIdx ? ' done' : ''}`}
+                  onClick={i < curIdx && s !== 'scan' ? () => setStep(s) : undefined}
+                >
+                  <div className="step-dot"/>
+                  {STEP_LABELS[i]}
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            <select
+              value={taxYear}
+              onChange={e => setTaxYear(Number(e.target.value))}
+              disabled={step !== 'setup'}
+              style={{
+                background:'var(--blue-bg)', color:'var(--blue-text)',
+                border:'0.5px solid var(--blue-border)', borderRadius:'var(--radius)',
+                padding:'3px 8px', fontSize:12, fontWeight:500, cursor: step === 'setup' ? 'pointer' : 'default',
+                outline:'none', appearance:'none', paddingRight:20,
+                backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%230C447C'/%3E%3C/svg%3E")`,
+                backgroundRepeat:'no-repeat', backgroundPosition:'right 6px center'
+              }}
+            >
+              {years.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <div className="avatar">{initials || 'JA'}</div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── GmailConnectSection ──────────────────────────────────────────────────
+    function GmailConnectSection({ googleClientId, setGoogleClientId, setGmailToken, connectGmail }) {
+      const isFileOrigin = window.location.protocol === 'file:';
+      const [mode, setMode] = useState('playground');
+      const [pastedToken, setPastedToken] = useState('');
+
+      function applyPastedToken() {
+        const t = pastedToken.trim();
+        if (t) { setGmailToken(t); setPastedToken(''); }
+      }
+
+      return (
+        <div style={{marginBottom:16}}>
+          <div style={{display:'flex', gap:8, marginBottom:14}}>
+            <button
+              className={mode === 'playground' ? 'btn-primary' : 'btn-secondary'}
+              style={{fontSize:12, padding:'6px 14px'}}
+              onClick={() => setMode('playground')}>
+              OAuth Playground
+            </button>
+            <button
+              className={mode === 'oauth' ? 'btn-primary' : 'btn-secondary'}
+              style={{fontSize:12, padding:'6px 14px', opacity: isFileOrigin ? 0.5 : 1}}
+              onClick={() => setMode('oauth')}>
+              My own Client ID
+            </button>
+          </div>
+
+          {mode === 'playground' && (
+            <div style={{background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:'var(--radius)', padding:'14px 16px'}}>
+              <div style={{fontSize:13, fontWeight:500, marginBottom:12}}>3-step Gmail access — no setup required</div>
+              <div style={{display:'flex', flexDirection:'column', gap:10, marginBottom:14}}>
+                <div style={{display:'flex', alignItems:'flex-start', gap:10, fontSize:13}}>
+                  <span style={{background:'var(--blue)', color:'#fff', borderRadius:'50%', width:20, height:20, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:600, flexShrink:0, marginTop:1}}>1</span>
+                  <div>
+                    <a href="https://developers.google.com/oauthplayground/?scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly" target="_blank" rel="noreferrer"
+                      style={{color:'var(--blue)', fontWeight:500}}>Open OAuth Playground →</a>
+                    <span style={{color:'var(--text2)'}}> · Click <strong>Authorize APIs</strong> · Sign in</span>
+                  </div>
+                </div>
+                <div style={{display:'flex', alignItems:'flex-start', gap:10, fontSize:13}}>
+                  <span style={{background:'var(--blue)', color:'#fff', borderRadius:'50%', width:20, height:20, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:600, flexShrink:0, marginTop:1}}>2</span>
+                  <span style={{color:'var(--text2)'}}>Click <strong>Exchange authorization code for tokens</strong></span>
+                </div>
+                <div style={{display:'flex', alignItems:'flex-start', gap:10, fontSize:13}}>
+                  <span style={{background:'var(--blue)', color:'#fff', borderRadius:'50%', width:20, height:20, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:600, flexShrink:0, marginTop:1}}>3</span>
+                  <span style={{color:'var(--text2)'}}>Copy <strong>Access token</strong> and paste below</span>
+                </div>
+              </div>
+              <div style={{fontSize:11, color:'var(--text3)', marginBottom:10}}>Valid ~1 hour · never stored to disk</div>
+              <div style={{display:'flex', gap:8}}>
+                <input type="password" placeholder="ya29.a0…"
+                  value={pastedToken}
+                  onChange={e => setPastedToken(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && applyPastedToken()}
+                  style={{flex:1}}
+                />
+                <button className="btn-primary" onClick={applyPastedToken} disabled={!pastedToken.trim()}>
+                  Connect →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {mode === 'oauth' && (
+            <div style={{background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:'var(--radius)', padding:'14px 16px'}}>
+              {isFileOrigin ? (
+                <div>
+                  <div style={{fontSize:13, fontWeight:500, marginBottom:8}}>Not available when opened as a local file</div>
+                  <div style={{fontSize:12, color:'var(--text2)', lineHeight:1.8, marginBottom:12}}>
+                    Google OAuth requires a real URL. Either:
+                  </div>
+                  <ul style={{fontSize:12, color:'var(--text2)', lineHeight:2, paddingLeft:18, marginBottom:12}}>
+                    <li>Use <strong>OAuth Playground</strong> (tab above) — works from any file</li>
+                    <li>Serve locally: <code style={{background:'var(--bg3)', padding:'2px 6px', borderRadius:3, fontSize:11}}>cd ~/Claude/projects/tax-agent && python3 -m http.server 8080</code> then open <strong>http://localhost:8080</strong></li>
+                    <li>Deploy to GitHub Pages via <code style={{background:'var(--bg3)', padding:'2px 6px', borderRadius:3, fontSize:11}}>app-deploy tax-agent</code></li>
+                  </ul>
+                </div>
+              ) : (
+                <>
+                  <div style={{fontSize:13, fontWeight:500, marginBottom:10}}>Connect with your own Google Cloud project</div>
+                  <div style={{fontSize:12, color:'var(--text2)', lineHeight:1.8, marginBottom:12}}>
+                    <strong>One-time setup:</strong> console.cloud.google.com → Create project → Enable Gmail API → Credentials → OAuth 2.0 Client ID (Web application) → add <code style={{background:'var(--bg3)', padding:'1px 5px', borderRadius:3, fontSize:11}}>{window.location.origin}</code> as an authorized JavaScript origin.
+                  </div>
+                  <div className="field-row">
+                    <input type="text" placeholder="123456789-abc…apps.googleusercontent.com"
+                      value={googleClientId}
+                      onChange={e => { setGoogleClientId(e.target.value); localStorage.setItem('google_client_id', e.target.value); }}
+                    />
+                  </div>
+                  <button className="btn-primary" style={{fontSize:12}} disabled={!googleClientId} onClick={connectGmail}>
+                    Connect Gmail →
+                  </button>
+                  <div style={{fontSize:11, color:'var(--text3)', marginTop:8}}>Token auto-refreshes. Client ID stored locally.</div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── PriorAccountsEditor ─────────────────────────────────────────────────
+    function PriorAccountsEditor({ accounts, setAccounts, priorYear }) {
+      const empty = () => ({ id: Date.now(), institution_name: '', account_number: '', account_type: 'bank', max_value_usd: '', year_end_value_usd: '' });
+
+      function add() { setAccounts(prev => [...prev, empty()]); }
+      function remove(id) { setAccounts(prev => prev.filter(a => a.id !== id)); }
+      function update(id, field, val) { setAccounts(prev => prev.map(a => a.id === id ? { ...a, [field]: val } : a)); }
+
+      return (
+        <div>
+          {accounts.length > 0 && (
+            <div style={{overflowX:'auto', marginBottom:10}}>
+              <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:'0.5px solid var(--border)'}}>
+                    {['Institution','Acct # (last 4)','Type','Max USD','Year-end USD',''].map(h => (
+                      <th key={h} style={{textAlign:'left', padding:'4px 8px', color:'var(--text3)', fontWeight:500, whiteSpace:'nowrap'}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {accounts.map(a => (
+                    <tr key={a.id} style={{borderBottom:'0.5px solid var(--border)'}}>
+                      <td style={{padding:'4px 4px'}}>
+                        <input type="text" value={a.institution_name} placeholder="e.g. Zerodha"
+                          onChange={e => update(a.id, 'institution_name', e.target.value)}
+                          style={{width:140, padding:'4px 6px', fontSize:12}}/>
+                      </td>
+                      <td style={{padding:'4px 4px'}}>
+                        <input type="text" value={a.account_number} placeholder="****1234" maxLength={8}
+                          onChange={e => update(a.id, 'account_number', e.target.value)}
+                          style={{width:80, padding:'4px 6px', fontSize:12, fontFamily:'monospace'}}/>
+                      </td>
+                      <td style={{padding:'4px 4px'}}>
+                        <select value={a.account_type} onChange={e => update(a.id, 'account_type', e.target.value)}
+                          style={{padding:'4px 6px', fontSize:12, border:'0.5px solid var(--border2)', borderRadius:'var(--radius)', background:'var(--bg)'}}>
+                          <option value="bank">Bank</option>
+                          <option value="brokerage">Brokerage</option>
+                          <option value="mf">MF</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </td>
+                      <td style={{padding:'4px 4px'}}>
+                        <input type="number" value={a.max_value_usd} placeholder="0"
+                          onChange={e => update(a.id, 'max_value_usd', e.target.value)}
+                          style={{width:90, padding:'4px 6px', fontSize:12}}/>
+                      </td>
+                      <td style={{padding:'4px 4px'}}>
+                        <input type="number" value={a.year_end_value_usd} placeholder="0"
+                          onChange={e => update(a.id, 'year_end_value_usd', e.target.value)}
+                          style={{width:90, padding:'4px 6px', fontSize:12}}/>
+                      </td>
+                      <td style={{padding:'4px 4px'}}>
+                        <button onClick={() => remove(a.id)} style={{background:'none', border:'none', cursor:'pointer', color:'var(--text3)', fontSize:14, padding:'2px 4px'}}>×</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <button className="btn-ghost" onClick={add} style={{fontSize:12}}>+ Add account</button>
+          {accounts.length === 0 && (
+            <div style={{fontSize:12, color:'var(--text3)', marginTop:6}}>
+              Add each account from your {priorYear} FBAR — institution name, last 4 of account number, type, and USD values from the filed form.
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── SetupScreen ──────────────────────────────────────────────────────────
+    function SetupScreen({ credentials, setCredentials, scanSources, setScanSources, localFolder, setLocalFolder,
+                           geminiKey, setGeminiKey, googleClientId, setGoogleClientId, gmailToken, setGmailToken, connectGmail,
+                           priorFbarFile, setPriorFbarFile, uploadedStatements, setUploadedStatements,
+                           priorManualAccounts, setPriorManualAccounts, taxYear, onNext }) {
+      const fileRef = useRef();
+      const stmtRef = useRef();
+      const priorYear = taxYear - 1;
+
+      function handleFbarFile(e) {
+        const f = e.target.files[0];
+        if (f) setPriorFbarFile(f);
+      }
+
+      function handleStatements(files) {
+        setUploadedStatements(prev => {
+          const existing = prev.map(f => f.name);
+          const newFiles = Array.from(files).filter(f => !existing.includes(f.name));
+          return [...prev, ...newFiles];
+        });
+      }
+
+      function handleDrop(e) {
+        e.preventDefault();
+        handleStatements(e.dataTransfer.files);
+      }
+
+      function removeStatement(name) {
+        setUploadedStatements(prev => prev.filter(f => f.name !== name));
+      }
+
+      function handleToggle(key) {
+        setScanSources(prev => ({ ...prev, [key]: !prev[key] }));
+      }
+
+      function handleCred(key, val) {
+        setCredentials(prev => ({ ...prev, [key]: val }));
+      }
+
+      const hasRealData = priorFbarFile || uploadedStatements.length > 0;
+      const canProceed = credentials.pan.length >= 10 && credentials.dob && credentials.fullName.length >= 2;
+
+      return (
+        <div className="main">
+          <div className="page-title">Set up {taxYear} FBAR</div>
+          <div className="page-sub">We'll use your {priorYear} FBAR as the baseline, then scan emails and documents to detect changes for {taxYear}.</div>
+
+          {!hasRealData && (
+            <div className="demo-banner">
+              No files uploaded — scan will use demo data. Upload your prior FBAR and/or statements below for real processing.
+            </div>
+          )}
+
+          <div className="section-label">Gemini API key</div>
+          <div className="field-row">
+            <input type="password" placeholder="AIza…  (stored locally, never sent to any server other than Google)"
+              value={geminiKey}
+              onChange={e => { setGeminiKey(e.target.value); localStorage.setItem('gemini_key', e.target.value); }}
+            />
+            <div className="field-hint">Required for PDF/XLS parsing. Get yours at aistudio.google.com/app/apikey — free tier is sufficient.</div>
+          </div>
+
+          <hr className="divider"/>
+
+          <div className="section-label">Prior year FBAR ({priorYear})</div>
+          <div style={{fontSize:12, color:'var(--text2)', marginBottom:10, lineHeight:1.6}}>
+            Upload your {priorYear} FinCEN 114 PDF — accounts are extracted automatically. Used as the baseline for matching {taxYear} statements.
+          </div>
+          <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:8}}>
+            {priorFbarFile
+              ? <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ {priorFbarFile.name} <button style={{background:'none', border:'none', cursor:'pointer', color:'var(--text3)', fontSize:11, marginLeft:4}} onClick={() => { setPriorFbarFile(null); fileRef.current.value=''; }}>remove</button></span>
+              : <button className="btn-ghost" onClick={() => fileRef.current.click()}>Browse for PDF / XML</button>
+            }
+            <input ref={fileRef} type="file" accept=".pdf,.xml" style={{display:'none'}} onChange={handleFbarFile}/>
+          </div>
+          {!priorFbarFile && (
+            <details style={{marginTop:4}}>
+              <summary style={{fontSize:12, color:'var(--text3)', cursor:'pointer', userSelect:'none'}}>No PDF? Enter accounts manually ›</summary>
+              <div style={{marginTop:10}}>
+                <PriorAccountsEditor accounts={priorManualAccounts} setAccounts={setPriorManualAccounts} priorYear={priorYear}/>
+              </div>
+            </details>
+          )}
+
+          <hr className="divider"/>
+
+          <div className="section-label">Statement files</div>
+          <div
+            className={`upload-zone${uploadedStatements.length > 0 ? ' has-file' : ''}`}
+            onDrop={handleDrop}
+            onDragOver={e => e.preventDefault()}
+          >
+            {uploadedStatements.length > 0 ? (
+              <>
+                <p style={{color:'var(--green-text)', marginBottom:8}}>✓ {uploadedStatements.length} file{uploadedStatements.length > 1 ? 's' : ''} ready</p>
+                {uploadedStatements.map(f => (
+                  <div key={f.name} style={{display:'flex', alignItems:'center', justifyContent:'space-between', fontSize:12, color:'var(--text2)', marginBottom:4, padding:'2px 4px'}}>
+                    <span>{f.name}</span>
+                    <button className="btn-ghost" style={{padding:'2px 8px', fontSize:11}} onClick={() => removeStatement(f.name)}>×</button>
+                  </div>
+                ))}
+                <div className="upload-btns" style={{marginTop:8}}>
+                  <button className="btn-ghost" onClick={() => stmtRef.current.click()}>Add more</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p>Drop statement PDFs / XLS files here</p>
+                <small>Zerodha, Groww, HDFC, ICICI, NSDL CAS, MF Central — any year-end statement</small>
+                <div className="upload-btns">
+                  <button className="btn-ghost" onClick={() => stmtRef.current.click()}>Browse files</button>
+                </div>
+              </>
+            )}
+            <input ref={stmtRef} type="file" accept=".pdf,.xls,.xlsx,.csv" multiple style={{display:'none'}}
+              onChange={e => handleStatements(e.target.files)}/>
+          </div>
+
+          <hr className="divider"/>
+
+          <div className="section-label">Gmail scan</div>
+          <div className="privacy-note">
+            Searches all of {taxYear} (plus Jan–Feb {taxYear+1}) using three layers: known institution senders (Zerodha, Groww, HDFC, ICICI, NSDL, MF Central, SBI, Kotak, Axis…), institutions in your prior FBAR, and broad subject-line patterns ("account statement", "portfolio statement", "demat statement", etc.). Only attachments are sent to Gemini — email body text is never read.
+          </div>
+
+          {gmailToken ? (
+            <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:16, padding:'10px 12px', background:'var(--green-bg)', border:'0.5px solid var(--green-border)', borderRadius:'var(--radius)', fontSize:13}}>
+              <span style={{color:'var(--green-text)'}}>✓ Gmail connected</span>
+              <button className="btn-ghost" style={{marginLeft:'auto', fontSize:11}} onClick={() => { setGmailToken(null); sessionStorage.removeItem('gmail_token'); setGoogleClientId(''); localStorage.removeItem('google_client_id'); }}>Disconnect</button>
+            </div>
+          ) : (
+            <GmailConnectSection
+              googleClientId={googleClientId} setGoogleClientId={setGoogleClientId}
+              setGmailToken={setGmailToken}
+              connectGmail={connectGmail}
+            />
+          )}
+
+          <hr className="divider"/>
+
+          <div className="section-label">Your credentials</div>
+          <div className="privacy-note">Used only to open password-protected statements. Never sent to any AI model.</div>
+          <div className="field-group">
+            <div className="field-row">
+              <label>PAN</label>
+              <input type="text" placeholder="ABCDE1234F" maxLength={10}
+                value={credentials.pan}
+                onChange={e => handleCred('pan', e.target.value.toUpperCase())}
+                style={{textTransform:'uppercase'}}/>
+            </div>
+            <div className="field-row">
+              <label>Date of birth</label>
+              <input type="date" value={credentials.dob} onChange={e => handleCred('dob', e.target.value)}/>
+            </div>
+          </div>
+          <div className="field-row">
+            <label>Full name (as on accounts)</label>
+            <input type="text" placeholder="As it appears on statements"
+              value={credentials.fullName}
+              onChange={e => handleCred('fullName', e.target.value)}/>
+            <div className="field-hint">Used to match statements to your accounts</div>
+          </div>
+
+          <div className="actions">
+            <button className="btn-primary" disabled={!canProceed} style={{opacity: canProceed ? 1 : 0.4}} onClick={onNext}>
+              Start scan →
+            </button>
+            {!canProceed && <span style={{fontSize:12, color:'var(--text3)'}}>Enter PAN, DOB, and name to continue</span>}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── ScanScreen ───────────────────────────────────────────────────────────
+    function ScanScreen({ taxYear, geminiKey, gmailToken, setGmailToken, priorFbarFile, uploadedStatements, priorManualAccounts, setAccounts, setFxRate, onNext, onBack }) {
+      const isGmail = geminiKey && gmailToken;
+      const isLocal = geminiKey && uploadedStatements.length > 0;
+      const isReal = isGmail || isLocal || (geminiKey && (priorFbarFile || priorManualAccounts.length > 0));
+      const [items, setItems] = useState([]);
+      const [error, setError] = useState(null);
+      const [done, setDone] = useState(false);
+      const [tokenExpired, setTokenExpired] = useState(false);
+      const [newToken, setNewToken] = useState('');
+      // Intermediate scan results — held here until user clicks Proceed
+      const [scanData, setScanData] = useState(null); // { priorAccounts, scannedList, rate, fbarFailed }
+      // Per-item skip state: Set of item IDs skipped in this session
+      const [skippedIds, setSkippedIds] = useState(() => new Set());
+      // Persisted skips: Set of item labels saved across sessions
+      const [savedSkipLabels] = useState(() => new Set(JSON.parse(localStorage.getItem('fbar_skipped_labels') || '[]')));
+
+      function setItemStatus(id, status, note) {
+        setItems(prev => prev.map(it => it.id === id ? { ...it, status, note: note || it.note } : it));
+      }
+
+      function skipItem(id) {
+        setSkippedIds(prev => new Set([...prev, id]));
+        // Also save the label persistently
+        setItems(prev => {
+          const item = prev.find(it => it.id === id);
+          if (item) {
+            const updated = new Set(savedSkipLabels);
+            updated.add(item.label);
+            localStorage.setItem('fbar_skipped_labels', JSON.stringify([...updated]));
+          }
+          return prev;
+        });
+      }
+
+      function unskipItem(id) {
+        setSkippedIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+        setItems(prev => {
+          const item = prev.find(it => it.id === id);
+          if (item) {
+            const updated = new Set(savedSkipLabels);
+            updated.delete(item.label);
+            localStorage.setItem('fbar_skipped_labels', JSON.stringify([...updated]));
+          }
+          return prev;
+        });
+      }
+
+      function proceedToReview() {
+        if (!scanData) return;
+        const { priorAccounts, scannedList, rate, fbarFailed } = scanData;
+        // Filter out skipped items and deduplicate across all sources
+        const seen = new Set();
+        const activeList = scannedList.filter(a => {
+          if (skippedIds.has(a._queryId)) return false;
+          const key = normInst(a.institution_name) + '|' + (a.account_number || '').replace(/\*/g,'').slice(-4);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        let finalAccounts;
+        if (activeList.length > 0) {
+          finalAccounts = matchAccounts(priorAccounts, activeList, rate);
+        } else if (priorAccounts.length > 0) {
+          finalAccounts = priorAccounts.map((p, i) => ({
+            id: String(i + 1), name: p.institution_name,
+            number: p.account_number || '****????', type: p.account_type || 'bank',
+            currency: p.currency || 'INR', priorMax: p.max_value_usd,
+            priorYearEnd: p.year_end_value_usd, newMax: null, newYearEnd: null,
+            status: 'missing', source: null
+          }));
+        } else {
+          finalAccounts = [];
+        }
+        console.log('[tax-agent] finalAccounts:', finalAccounts);
+        setAccounts(finalAccounts);
+        onNext();
+      }
+
+      useEffect(() => {
+        let cancelled = false;
+
+        async function fetchFxRate() {
+          let rate = 83.97;
+          try {
+            const r = await fetch(`${WORKER_URL}/api/fx?year=${taxYear}`);
+            if (r.ok) { const d = await r.json(); rate = d.rate; }
+          } catch(_) {}
+          return rate;
+        }
+
+        async function parsePriorFbarStep() {
+          // PDF takes priority — try XFA extraction (and Gemini fallback) first
+          if (priorFbarFile) {
+            setItemStatus('fbar', 'active');
+            try {
+              const accounts = await parsePriorFBAR(priorFbarFile, geminiKey);
+              if (accounts.length > 0) {
+                setItemStatus('fbar', 'done', `${accounts.length} accounts found`);
+                return { accounts, failed: false };
+              }
+              // PDF parsed but 0 accounts — check console for XFA debug logs
+              const hint = !geminiKey ? ' (no Gemini key for fallback)' : ' (check console for XFA debug)';
+              setItemStatus('fbar', 'error', `0 accounts extracted from PDF${hint}`);
+            } catch(e) {
+              console.error('[tax-agent] parsePriorFBAR error:', e);
+              setItemStatus('fbar', 'error', e.message || String(e));
+            }
+          }
+          // Fall back to manually entered accounts
+          if (priorManualAccounts.length > 0) {
+            const accounts = priorManualAccounts.map(a => ({
+              institution_name: a.institution_name,
+              account_number: a.account_number,
+              account_type: a.account_type,
+              max_value_usd: parseFloat(a.max_value_usd) || 0,
+              year_end_value_usd: parseFloat(a.year_end_value_usd) || 0,
+              currency: 'INR',
+            }));
+            setItemStatus('fbar', 'done', `${accounts.length} accounts from manual entry`);
+            return { accounts, failed: false };
+          }
+          return { accounts: [], failed: false };
+        }
+
+        async function runGmailScan(priorAccounts) {
+          const queries = buildGmailQueries(priorAccounts, taxYear);
+          const kindLabel = { scan: 'email scan', known: 'institution', fbar: 'prior FBAR', broad: 'subject match' };
+          const gmailItems = queries.map((q, i) => ({
+            id: `gq_${i}`, label: `${q.name}`, note2: kindLabel[q.kind] || '', status: 'pending', q: q.q,
+            savedSkip: savedSkipLabels.has(q.name)
+          }));
+          // Auto-skip items saved from prior sessions
+          const autoSkipped = new Set(gmailItems.filter(it => it.savedSkip).map(it => it.id));
+          setSkippedIds(autoSkipped);
+
+          // Insert gmail items before 'match'
+          setItems(prev => {
+            const withoutMatch = prev.filter(it => it.id !== 'match');
+            const withStatus = gmailItems.map(it => ({
+              ...it, status: it.savedSkip ? 'skip' : 'pending'
+            }));
+            return [...withoutMatch, ...withStatus, { id:'match', label:'Matching accounts', status:'pending' }];
+          });
+
+          const scannedList = [];
+          const seenFiles = new Set();
+          const seenAccounts = new Set();
+          // Track per-name totals so multiple queries for same institution merge in UI
+          const nameFoundCount = {};
+
+          for (let i = 0; i < gmailItems.length; i++) {
+            if (cancelled) return scannedList;
+            const item = gmailItems[i];
+            if (item.savedSkip) continue;
+            // Show active only on first query for this name
+            const isFirstForName = !Object.prototype.hasOwnProperty.call(nameFoundCount, item.label);
+            if (isFirstForName) {
+              nameFoundCount[item.label] = 0;
+              setItemStatus(item.id, 'active');
+            }
+            let found = 0;
+            try {
+              const messages = await gmailSearch(gmailToken, item.q, 10);
+              for (const msg of messages) {
+                if (cancelled) return scannedList;
+                const full = await gmailGetMessage(gmailToken, msg.id);
+                const subject = gmailHeader(full.payload, 'Subject');
+                const from = gmailHeader(full.payload, 'From');
+                const attachments = extractAttachments(full.payload);
+                for (const att of attachments) {
+                  if (seenFiles.has(att.filename)) continue;
+                  seenFiles.add(att.filename);
+                  try {
+                    const b64 = await gmailGetAttachment(gmailToken, msg.id, att.attId);
+                    const parsedArr = await parseStatement({ data: b64, mimeType: att.mimeType, name: att.filename }, geminiKey);
+                    for (const parsed of parsedArr) {
+                      if (!parsed.institution_name) continue;
+                      const last4 = (parsed.account_number || '').replace(/\*/g,'').slice(-4);
+                      const normName = normInst(parsed.institution_name);
+                      // Dedup key: normalised institution name + account last4
+                      const dedupeKey = normName + '|' + last4;
+                      if (seenAccounts.has(dedupeKey)) {
+                        // Already seen this account — update values if this source is more authoritative
+                        // (direct statement > portfolio manager report > CAS aggregation)
+                        const srcRank = { bank: 3, brokerage: 3, cas_mf: 2, cas_demat: 2, portfolio_manager: 1 };
+                        const existing = scannedList.find(s => normInst(s.institution_name) + '|' + (s.account_number||'').replace(/\*/g,'').slice(-4) === dedupeKey);
+                        if (existing) {
+                          const newRank = srcRank[parsed.source_type] || 1;
+                          const oldRank = srcRank[existing.source_type] || 1;
+                          if (newRank > oldRank) {
+                            // Replace with more authoritative source
+                            Object.assign(existing, { ...parsed, _source: `Gmail: ${subject.slice(0,50)}`, _from: from, _sources: [...(existing._sources||[existing._source]), `Gmail: ${subject.slice(0,50)}`] });
+                          } else {
+                            existing._sources = [...(existing._sources||[existing._source]), `Gmail: ${subject.slice(0,50)}`];
+                          }
+                        }
+                        continue;
+                      }
+                      seenAccounts.add(dedupeKey);
+                      scannedList.push({ ...parsed, _source: `Gmail: ${subject.slice(0,50)}`, _from: from, _sources: [`Gmail: ${subject.slice(0,50)}`], _queryId: item.id });
+                      found++;
+                    }
+                  } catch(_) {}
+                }
+              }
+              nameFoundCount[item.label] = (nameFoundCount[item.label] || 0) + found;
+              // Only update UI status on last query for this name, or if we found something
+              const isLastForName = i === gmailItems.length - 1 || gmailItems[i+1].label !== item.label;
+              if (isFirstForName || found > 0 || isLastForName) {
+                const total = nameFoundCount[item.label];
+                setItemStatus(item.id, 'done', total > 0 ? `${total} account${total > 1 ? 's' : ''} found` : 'no accounts');
+              }
+            } catch(e) {
+              if (e instanceof GmailTokenExpiredError) throw e;
+              setItemStatus(item.id, 'error', e.message.slice(0, 60));
+            }
+          }
+          return scannedList;
+        }
+
+        async function runReal() {
+          // Step 0: Validate Gmail token before doing any work
+          if (isGmail) {
+            const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile',
+              { headers: { Authorization: `Bearer ${gmailToken}` } });
+            if (r.status === 401) throw new GmailTokenExpiredError();
+          }
+
+          // Step 1: FX rate
+          setItems([
+            ...(priorFbarFile ? [{ id:'fbar', label:`Parsing prior FBAR: ${priorFbarFile.name}`, status:'pending' }] : []),
+            { id:'fx', label:'Fetching INR → USD exchange rate', status:'pending' },
+            { id:'match', label:'Matching accounts', status:'pending' }
+          ]);
+
+          setItemStatus('fx', 'active');
+          const rate = await fetchFxRate();
+          if (cancelled) return;
+          setFxRate(rate);
+          setItemStatus('fx', 'done', `₹${rate.toFixed(2)}/$1`);
+
+          // Step 2: Parse prior FBAR
+          const { accounts: priorAccounts, failed: fbarFailed } = await parsePriorFbarStep();
+          if (cancelled) return;
+
+          // Step 3: Scan sources
+          let scannedList = [];
+
+          if (isGmail) {
+            scannedList = await runGmailScan(priorAccounts);
+          }
+
+          // Also parse any manually dropped files
+          if (uploadedStatements.length > 0) {
+            uploadedStatements.forEach((f, i) => {
+              setItems(prev => {
+                const idx = prev.findIndex(it => it.id === 'match');
+                const newItem = { id:`stmt_${i}`, label:`Parsing: ${f.name}`, status:'pending', file: f };
+                return [...prev.slice(0, idx), newItem, ...prev.slice(idx)];
+              });
+            });
+            for (let i = 0; i < uploadedStatements.length; i++) {
+              if (cancelled) return;
+              setItemStatus(`stmt_${i}`, 'active');
+              try {
+                const parsedArr = await parseStatement(uploadedStatements[i], geminiKey);
+                const valid = parsedArr.filter(r => r.institution_name);
+                valid.forEach(r => scannedList.push(r));
+                setItemStatus(`stmt_${i}`, 'done', valid.length > 0 ? valid.map(r => r.institution_name).join(', ') : 'no accounts found');
+              } catch(e) {
+                setItemStatus(`stmt_${i}`, 'error', e.message.slice(0, 60));
+              }
+            }
+          }
+
+          if (cancelled) return;
+
+          // Remove the match placeholder — matching happens when user clicks Proceed
+          setItems(prev => prev.filter(it => it.id !== 'match'));
+
+          // Store intermediate results and let user review before proceeding
+          setScanData({ priorAccounts, scannedList, rate, fbarFailed });
+          setDone(true);
+        }
+
+        async function runDemo() {
+          const demoItems = [
+            { id:'s1', label:'Searching Gmail — Zerodha', status:'pending' },
+            { id:'s2', label:'Searching Gmail — Groww', status:'pending' },
+            { id:'s3', label:'Searching Gmail — HDFC', status:'pending' },
+            { id:'s4', label:'Searching Gmail — ICICI & NSDL', status:'pending' },
+            { id:'s5', label:'Fetching INR → USD exchange rate', status:'pending' },
+            { id:'s6', label:'Matching accounts to prior FBAR', status:'pending' },
+          ];
+          setItems(demoItems);
+          const delays = [700, 600, 800, 900, 500, 600];
+          for (let i = 0; i < demoItems.length; i++) {
+            if (cancelled) return;
+            setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status:'active' } : it));
+            await new Promise(r => setTimeout(r, delays[i]));
+            if (cancelled) return;
+            setItems(prev => prev.map((it, idx) => idx === i ? { ...it, status:'done' } : it));
+          }
+          try {
+            const r = await fetch(`${WORKER_URL}/api/fx?year=${taxYear}`);
+            if (r.ok) { const d = await r.json(); setFxRate(d.rate); }
+          } catch(_) {}
+          const demoAccounts = DEMO_ACCOUNTS.map(a => ({ ...a }));
+          setScanData({ priorAccounts: [], scannedList: demoAccounts.map(a => ({...a, _queryId: 's1'})), rate: 83.97, fbarFailed: false });
+          setAccounts(demoAccounts);
+          setDone(true);
+        }
+
+        if (isReal) runReal().catch(e => {
+          if (e instanceof GmailTokenExpiredError) {
+            sessionStorage.removeItem('gmail_token');
+            setGmailToken(null);
+            setTokenExpired(true);
+            window.open('https://developers.google.com/oauthplayground/?scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly', '_blank');
+          } else {
+            setError(e.message);
+          }
+        });
+        else runDemo().catch(e => setError(e.message));
+
+        return () => { cancelled = true; };
+      }, []);
+
+      const statusIcon = (s) => {
+        if (s === 'done') return '✓';
+        if (s === 'error') return '✗';
+        if (s === 'active') return <span className="spinner">◌</span>;
+        return '·';
+      };
+
+      return (
+        <div className="scan-main">
+          <button className="nav-back" onClick={onBack}>← Setup</button>
+          <div className="page-title">
+            {isGmail ? 'Scanning Gmail' : isLocal ? 'Parsing files' : 'Demo scan'} — {taxYear}
+          </div>
+          <div className="page-sub">
+            {isGmail
+              ? `Searching Jan–Dec ${taxYear} (+ buffer to Feb ${taxYear+1}) for statements from all known institutions…`
+              : isLocal
+              ? `Parsing ${uploadedStatements.length} file${uploadedStatements.length > 1 ? 's' : ''} with Gemini…`
+              : 'No Gmail or files connected — loading demo accounts.'}
+          </div>
+          {!isReal && (
+            <div className="demo-banner" style={{marginBottom:12}}>
+              {!geminiKey ? 'Add your Gemini API key and connect Gmail (or upload files) on the Setup screen to process real data.'
+                         : 'Connect Gmail or upload statement files on the Setup screen.'}
+            </div>
+          )}
+          {error && !tokenExpired && <div className="demo-banner" style={{marginBottom:12, borderColor:'var(--red-border)', background:'var(--red-bg)', color:'var(--red-text)'}}>Error: {error}</div>}
+          {tokenExpired && (
+            <div style={{marginBottom:16, padding:'14px 16px', background:'var(--amber-bg)', border:'0.5px solid var(--amber-border)', borderRadius:'var(--radius)'}}>
+              <div style={{fontSize:13, fontWeight:500, color:'var(--amber-text)', marginBottom:10}}>Gmail token expired — paste a new one to re-scan</div>
+              <div style={{fontSize:12, color:'var(--amber-text)', marginBottom:12, lineHeight:1.7}}>
+                The OAuth Playground should have opened. If not: <a href="https://developers.google.com/oauthplayground/?scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly" target="_blank" rel="noreferrer" style={{color:'var(--blue)', fontWeight:500}}>open it here →</a><br/>
+                Click <strong>Authorize APIs</strong> · sign in · <strong>Exchange authorization code for tokens</strong> · copy <strong>Access token</strong>
+              </div>
+              <div style={{display:'flex', gap:8}}>
+                <input type="password" placeholder="ya29.a0…" value={newToken}
+                  onChange={e => setNewToken(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && newToken.trim()) { setGmailToken(newToken.trim()); sessionStorage.setItem('gmail_token', newToken.trim()); setTokenExpired(false); setNewToken(''); onBack(); } }}
+                  style={{flex:1, padding:'8px 10px', border:'0.5px solid var(--amber-border)', borderRadius:'var(--radius)', fontSize:13}}
+                />
+                <button className="btn-primary"
+                  disabled={!newToken.trim()}
+                  onClick={() => { const t = newToken.trim(); setGmailToken(t); sessionStorage.setItem('gmail_token', t); setTokenExpired(false); setNewToken(''); onBack(); }}>
+                  Reconnect & Re-scan →
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="scan-list">
+            {items.map(it => {
+              const isSkipped = skippedIds.has(it.id);
+              const canSkip = done && it.id !== 'fbar' && it.id !== 'fx';
+              return (
+                <div key={it.id} className={`scan-item${isSkipped ? '' : it.status === 'done' ? ' done' : it.status === 'active' ? ' active' : it.status === 'error' ? ' error' : ''}`}
+                  style={isSkipped ? {opacity:0.4, textDecoration:'line-through'} : {}}>
+                  <span className="scan-icon">{isSkipped ? '–' : statusIcon(it.status)}</span>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{display:'flex', alignItems:'center', gap:6}}>
+                      <span>{it.label}</span>
+                      {it.note2 && <span style={{fontSize:10, color:'var(--text3)', background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:20, padding:'1px 6px'}}>{it.note2}</span>}
+                      {it.status === 'skip' && <span style={{fontSize:10, color:'var(--text3)'}}>auto-skipped</span>}
+                    </div>
+                    {!isSkipped && it.note && <div style={{fontSize:11, opacity:0.7, marginTop:2}}>{it.note}</div>}
+                  </div>
+                  {it.q && (it.status === 'done' || it.status === 'error') && (
+                    <a href={`https://mail.google.com/mail/u/0/#search/${encodeURIComponent(it.q)}`}
+                      target="_blank" rel="noreferrer"
+                      style={{fontSize:11, color:'var(--blue)', flexShrink:0, whiteSpace:'nowrap', textDecoration:'none'}}>
+                      view emails →
+                    </a>
+                  )}
+                  {canSkip && (
+                    isSkipped
+                      ? <button onClick={() => unskipItem(it.id)} style={{fontSize:11, color:'var(--blue)', background:'none', border:'none', cursor:'pointer', flexShrink:0}}>restore</button>
+                      : <button onClick={() => skipItem(it.id)} style={{fontSize:11, color:'var(--text3)', background:'none', border:'none', cursor:'pointer', flexShrink:0, padding:'2px 6px'}}>skip ✕</button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {done && scanData && (
+            <div style={{marginTop:20, display:'flex', alignItems:'center', gap:12, flexWrap:'wrap'}}>
+              <button className="btn-primary" onClick={proceedToReview}>
+                Proceed to review →
+              </button>
+              {skippedIds.size > 0 && (
+                <span style={{fontSize:12, color:'var(--text3)'}}>{skippedIds.size} source{skippedIds.size > 1 ? 's' : ''} skipped · skips saved for future scans</span>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── ReviewScreen ─────────────────────────────────────────────────────────
+    function ReviewScreen({ accounts, setAccounts, taxYear, fxRate, onNext, onBack }) {
+      const priorYear = taxYear - 1;
+      const counts = {
+        matched: accounts.filter(a => a.status === 'matched').length,
+        review: accounts.filter(a => a.status === 'review').length,
+        new: accounts.filter(a => a.status === 'new').length,
+        missing: accounts.filter(a => a.status === 'missing').length,
+        closed: accounts.filter(a => a.status === 'closed').length,
+        confirmed: accounts.filter(a => a.status === 'confirmed').length,
+      };
+
+      function updateAccount(id, field, raw) {
+        const val = raw === '' ? null : parseFloat(raw.replace(/[^0-9.]/g, ''));
+        setAccounts(prev => prev.map(a => a.id === id ? { ...a, [field]: isNaN(val) ? null : val } : a));
+      }
+
+      function approveAllMatched() {
+        setAccounts(prev => prev.map(a => a.status === 'matched' ? { ...a, status: 'confirmed' } : a));
+      }
+
+      function rowClass(a) {
+        if (a.status === 'review') return 'row-review';
+        if (a.status === 'new') return 'row-new';
+        if (a.status === 'missing') return 'row-missing';
+        if (a.status === 'closed') return 'row-closed';
+        return '';
+      }
+
+      function statusPill(s) {
+        const map = { matched:'pill-green', review:'pill-amber', new:'pill-blue', missing:'pill-red', closed:'pill-gray', confirmed:'pill-green' };
+        const label = s === 'confirmed' ? 'matched' : s;
+        return <span className={`pill ${map[s] || 'pill-gray'}`}>{label}</span>;
+      }
+
+      function EditCell({ accountId, field, value }) {
+        const [local, setLocal] = useState(value != null ? String(Math.round(value)) : '');
+        return (
+          <input
+            className="edit-cell"
+            value={local}
+            placeholder="—"
+            onChange={e => setLocal(e.target.value)}
+            onBlur={() => updateAccount(accountId, field, local)}
+          />
+        );
+      }
+
+      return (
+        <div className="review-main">
+          <button className="nav-back" onClick={onBack}>← Re-scan</button>
+          <div className="top-row">
+            <div>
+              <div className="page-title">Review accounts</div>
+              <div className="page-sub">{accounts.length} accounts · edit any cell · only amber, blue, red need action</div>
+            </div>
+            <div className="stat-row">
+              <div className="stat"><div className="stat-val" style={{color:'#3B6D11'}}>{counts.matched + counts.confirmed}</div><div className="stat-label">matched</div></div>
+              {counts.review > 0 && <div className="stat"><div className="stat-val" style={{color:'#854F0B'}}>{counts.review}</div><div className="stat-label">review</div></div>}
+              {counts.new > 0 && <div className="stat"><div className="stat-val" style={{color:'#185FA5'}}>{counts.new}</div><div className="stat-label">new</div></div>}
+              {counts.missing > 0 && <div className="stat"><div className="stat-val" style={{color:'#A32D2D'}}>{counts.missing}</div><div className="stat-label">missing</div></div>}
+              {counts.closed > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--text3)'}}>{counts.closed}</div><div className="stat-label">closed</div></div>}
+            </div>
+          </div>
+
+          <div className="tbl-outer">
+            <table>
+              <thead>
+                <tr>
+                  <th rowSpan={2}>Account name</th>
+                  <th rowSpan={2}>Number</th>
+                  <th rowSpan={2}>Type</th>
+                  <th rowSpan={2}>Ownership</th>
+                  <th rowSpan={2}>Ccy</th>
+                  <th colSpan={2} className="prior">{priorYear} prior</th>
+                  <th colSpan={2} className="new-grp">{taxYear} new</th>
+                  <th rowSpan={2}>Status</th>
+                  <th rowSpan={2}>Source</th>
+                </tr>
+                <tr>
+                  <th className="sub-prior">Max value</th>
+                  <th className="sub-prior-r">Year-end</th>
+                  <th className="sub-new">Max value</th>
+                  <th className="sub-new-r">Year-end</th>
+                </tr>
+              </thead>
+              <tbody>
+                {accounts.map(a => (
+                  <tr key={a.id} className={rowClass(a)}>
+                    <td>{a.name}</td>
+                    <td className="mono">{a.number}</td>
+                    <td>
+                      {a.status === 'review' && a.reviewReason === 'type_change' ? (
+                        <div className="type-change">
+                          <span className="type-old">{TYPE_LABELS[a.priorType]}</span>
+                          <span style={{color:'var(--text3)', fontSize:10}}>→</span>
+                          <span>{TYPE_LABELS[a.type]}</span>
+                        </div>
+                      ) : TYPE_LABELS[a.type] || a.type}
+                    </td>
+                    <td style={{fontSize:11}}>
+                      {a.ownership === 'joint'
+                        ? <span title={a.joint_owner || ''} style={{color:'var(--amber-text)'}}>
+                            joint{a.joint_owner ? ` · ${a.joint_owner.length > 22 ? a.joint_owner.slice(0,22)+'…' : a.joint_owner}` : ''}
+                          </span>
+                        : a.ownership === 'sigauth'
+                        ? <span style={{color:'var(--text3)'}}>sig auth</span>
+                        : a.ownership === 'sole'
+                        ? <span style={{color:'var(--text3)'}}>sole</span>
+                        : <span style={{color:'var(--text3)'}}>—</span>}
+                    </td>
+                    <td style={{color:'var(--text3)', fontSize:11}}>{a.currency}</td>
+                    <td className="muted pb">{fmtUSD(a.priorMax)}</td>
+                    <td className="muted">{fmtUSD(a.priorYearEnd)}</td>
+                    <td className="r nb">
+                      {a.status === 'matched' || a.status === 'confirmed' ? fmtUSD(a.newMax) :
+                        <EditCell key={a.id+'max'} accountId={a.id} field="newMax" value={a.newMax}/>}
+                    </td>
+                    <td className="r">
+                      {a.status === 'matched' || a.status === 'confirmed' ? fmtUSD(a.newYearEnd) :
+                        <EditCell key={a.id+'ye'} accountId={a.id} field="newYearEnd" value={a.newYearEnd}/>}
+                    </td>
+                    <td>{statusPill(a.status)}</td>
+                    <td>{a.source ? <span className="chip">{a.source}</span> : <span style={{color:'var(--text3)'}}>—</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="actions">
+            <button className="btn-primary" onClick={onNext}>Proceed to confirm →</button>
+            <button className="btn-ghost" onClick={approveAllMatched}>Approve all matched</button>
+            <button className="btn-secondary" onClick={onBack} style={{marginLeft:'auto'}}>← Re-scan</button>
+            <span className="fx-note">INR → USD · Dec 31 ₹{fxRate.toFixed(2)}/$1</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── ConfirmScreen ────────────────────────────────────────────────────────
+    function ConfirmScreen({ accounts, setAccounts, taxYear, fxRate, onNext, onBack }) {
+      const pending = accounts.filter(a => ['review', 'new', 'missing'].includes(a.status));
+      const [messages, setMessages] = useState([]);
+      const [qIdx, setQIdx] = useState(0);
+      const [inputVal, setInputVal] = useState('');
+      const [waitingManual, setWaitingManual] = useState(null); // { accountId, field, label }
+      const [manualVal, setManualVal] = useState('');
+      const [complete, setComplete] = useState(false);
+      const scrollRef = useRef();
+
+      function addMsg(msg) {
+        setMessages(prev => {
+          const next = [...prev, msg];
+          return next;
+        });
+      }
+
+      function scrollBottom() {
+        setTimeout(() => {
+          if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }, 50);
+      }
+
+      function makeQuestion(account) {
+        if (account.status === 'review' && account.reviewReason === 'type_change') {
+          return {
+            id: `q_${account.id}`,
+            from: 'agent',
+            text: `**${account.name}** — account type changed from ${TYPE_LABELS[account.priorType]} to ${TYPE_LABELS[account.type]} in the ${taxYear} statement. Is this correct?`,
+            accountId: account.id,
+            actions: [
+              { label: `Yes, it's ${TYPE_LABELS[account.type].toLowerCase()} now`, value: 'confirm_type' },
+              { label: `Keep as ${TYPE_LABELS[account.priorType]}`, value: 'revert_type' },
+            ]
+          };
+        }
+        if (account.status === 'missing') {
+          return {
+            id: `q_${account.id}`,
+            from: 'agent',
+            text: `**${account.name}** — no ${taxYear} statement found. Prior year value was ${fmtUSD(account.priorYearEnd)}.`,
+            accountId: account.id,
+            actions: [
+              { label: 'Use prior year values', value: 'use_prior' },
+              { label: "I'll enter manually", value: 'manual_entry' },
+              { label: 'Account was closed', value: 'closed' },
+            ]
+          };
+        }
+        if (account.status === 'new') {
+          return {
+            id: `q_${account.id}`,
+            from: 'agent',
+            text: `**${account.name}** is new. Year-end value from statement: ${fmtUSD(account.newYearEnd)}. What was the peak balance during ${taxYear}?`,
+            accountId: account.id,
+            actions: [
+              { label: `Same as year-end (${fmtUSD(account.newYearEnd)})`, value: 'same_as_yearend' },
+              { label: "I'll enter it", value: 'manual_max' },
+            ]
+          };
+        }
+      }
+
+      function showCompletion() {
+        const active = accounts.filter(a => a.status !== 'closed' && a.newMax != null);
+        const totalMax = active.reduce((s, a) => s + (a.newMax || 0), 0);
+        const flagged = accounts.filter(a => a.notes).length;
+        addMsg({
+          id: 'complete',
+          from: 'agent',
+          text: `All ${accounts.length} accounts resolved. Total max value: **${fmtUSD(totalMax)}**\nExchange rate: ₹${fxRate.toFixed(2)}/$1 (Dec 31, ${taxYear})${flagged > 0 ? ` · ${flagged} account${flagged > 1 ? 's' : ''} flagged for review` : ''}.`,
+          actions: [
+            { label: 'Generate FBAR PDF →', value: 'export', primary: true },
+            { label: 'Back to table', value: 'back' },
+          ],
+          isFinal: true
+        });
+        setComplete(true);
+        scrollBottom();
+      }
+
+      useEffect(() => {
+        const matched = accounts.filter(a => a.status === 'matched' || a.status === 'confirmed');
+        const initMsg = {
+          id: 'init',
+          from: 'agent',
+          text: `${matched.length} accounts matched cleanly — no action needed on those. I have ${pending.length} item${pending.length !== 1 ? 's' : ''} that need your input.`,
+          card: accounts.map(a => ({ name: a.name, number: a.number, status: a.status === 'confirmed' ? 'matched' : a.status }))
+        };
+        addMsg(initMsg);
+
+        if (pending.length === 0) {
+          setTimeout(() => showCompletion(), 400);
+        } else {
+          setTimeout(() => {
+            addMsg(makeQuestion(pending[0]));
+            scrollBottom();
+          }, 500);
+        }
+      }, []);
+
+      useEffect(scrollBottom, [messages]);
+
+      function processAction(msgId, action, accountId) {
+        const account = accounts.find(a => a.id === accountId);
+        if (!account) return;
+
+        // Dismiss buttons on this message
+        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actions: null } : m));
+
+        // User message
+        addMsg({ id: `u_${Date.now()}`, from: 'user', text: action.label });
+
+        let agentText = '';
+        let memoryNote = null;
+        let needManual = null;
+
+        if (action.value === 'confirm_type') {
+          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, status: 'confirmed' } : a));
+          agentText = `Updated to ${TYPE_LABELS[account.type]}.`;
+          memoryNote = `${account.name} reclassified ${TYPE_LABELS[account.priorType]} → ${TYPE_LABELS[account.type]} from ${taxYear}.`;
+        } else if (action.value === 'revert_type') {
+          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, type: a.priorType, status: 'confirmed' } : a));
+          agentText = `Kept as ${TYPE_LABELS[account.priorType]}.`;
+        } else if (action.value === 'use_prior') {
+          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, newMax: a.priorMax, newYearEnd: a.priorYearEnd, status: 'confirmed', notes: 'Prior year values used — statement not yet received.' } : a));
+          agentText = `Done — using prior year values for ${account.name}, flagged for review before filing.`;
+          memoryNote = `${account.name} statements arrive late — use prior year values until updated.`;
+        } else if (action.value === 'closed') {
+          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, status: 'closed' } : a));
+          agentText = `${account.name} marked as closed for ${taxYear}.`;
+        } else if (action.value === 'same_as_yearend') {
+          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, newMax: a.newYearEnd, status: 'confirmed' } : a));
+          agentText = `Peak balance set to ${fmtUSD(account.newYearEnd)} (same as year-end).`;
+        } else if (action.value === 'manual_entry') {
+          needManual = { accountId, field: 'yearend', label: `Enter year-end value for ${account.name} ($)` };
+          agentText = null;
+        } else if (action.value === 'manual_max') {
+          needManual = { accountId, field: 'max', label: `Enter peak balance for ${account.name} in ${taxYear} ($)` };
+          agentText = null;
+        } else if (action.value === 'export') {
+          onNext();
+          return;
+        } else if (action.value === 'back') {
+          // go back to review — handled by parent
+          onNext('review');
+          return;
+        }
+
+        if (needManual) {
+          setWaitingManual(needManual);
+          scrollBottom();
+          return;
+        }
+
+        const nextIdx = qIdx + 1;
+        setQIdx(nextIdx);
+
+        setTimeout(() => {
+          const agentMsg = { id: `a_${Date.now()}`, from: 'agent', text: agentText, memoryNote };
+          addMsg(agentMsg);
+
+          if (!complete && nextIdx < pending.length) {
+            setTimeout(() => {
+              addMsg(makeQuestion(pending[nextIdx]));
+              scrollBottom();
+            }, 400);
+          } else if (!complete) {
+            setTimeout(() => showCompletion(), 400);
+          }
+          scrollBottom();
+        }, 300);
+      }
+
+      function submitManual() {
+        if (!waitingManual || !manualVal) return;
+        const { accountId, field } = waitingManual;
+        const account = accounts.find(a => a.id === accountId);
+        const val = parseFloat(manualVal.replace(/[^0-9.]/g, ''));
+
+        let agentText = '';
+        if (field === 'max') {
+          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, newMax: val, status: 'confirmed' } : a));
+          agentText = `Peak balance for ${account.name} set to ${fmtUSD(val)}.`;
+        } else {
+          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, newYearEnd: val, newMax: val, status: 'confirmed' } : a));
+          agentText = `${account.name} values set to ${fmtUSD(val)}.`;
+        }
+
+        setWaitingManual(null);
+        setManualVal('');
+        addMsg({ id: `u_${Date.now()}`, from: 'user', text: `$${val.toLocaleString()}` });
+
+        const nextIdx = qIdx + 1;
+        setQIdx(nextIdx);
+
+        setTimeout(() => {
+          addMsg({ id: `a_${Date.now()}`, from: 'agent', text: agentText });
+          if (nextIdx < pending.length) {
+            setTimeout(() => {
+              addMsg(makeQuestion(pending[nextIdx]));
+              scrollBottom();
+            }, 400);
+          } else {
+            setTimeout(() => showCompletion(), 400);
+          }
+          scrollBottom();
+        }, 300);
+      }
+
+      function sendFreeText() {
+        if (!inputVal.trim()) return;
+        addMsg({ id: `u_${Date.now()}`, from: 'user', text: inputVal.trim() });
+        setInputVal('');
+        scrollBottom();
+      }
+
+      return (
+        <div className="chat-area">
+          <div style={{padding:'8px 16px 0', borderBottom:'0.5px solid var(--border)'}}>
+            <button className="nav-back" onClick={onBack}>← Review table</button>
+          </div>
+          <div className="chat-scroll" ref={scrollRef}>
+            {messages.map(msg => (
+              <div key={msg.id} className={msg.from === 'agent' ? 'msg-agent' : 'msg-user'}>
+                <div className={msg.from === 'agent' ? 'agent-label' : 'user-label'}>
+                  {msg.from === 'agent' ? 'Tax agent' : 'You'}
+                </div>
+                <div className={msg.from === 'agent' ? 'bubble-agent' : 'bubble-user'}>
+                  {msg.text && <div>{renderText(msg.text)}</div>}
+                  {msg.card && (
+                    <div className="summary-card">
+                      {(() => {
+                        const matched = msg.card.filter(r => r.status === 'matched' || r.status === 'confirmed');
+                        const nonMatched = msg.card.filter(r => !['matched','confirmed'].includes(r.status));
+                        const pillMap = { matched:'pill-green', review:'pill-amber', new:'pill-blue', missing:'pill-red', closed:'pill-gray' };
+                        return (
+                          <>
+                            {matched.length > 0 && (
+                              <div className="summary-row">
+                                <span className="s-muted">{matched.map(r => r.name).join(', ')}</span>
+                                <span className="pill pill-green">matched ×{matched.length}</span>
+                              </div>
+                            )}
+                            {nonMatched.map(r => (
+                              <div key={r.name} className="summary-row">
+                                <span className="s-name">{r.name} {r.number}</span>
+                                <span className={`pill ${pillMap[r.status] || 'pill-gray'}`}>{r.status}</span>
+                              </div>
+                            ))}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  )}
+                  {msg.memoryNote && (
+                    <div className="memory-note">Remembered: {msg.memoryNote}</div>
+                  )}
+                  {msg.actions && (
+                    <div className="action-row">
+                      {msg.actions.map(action => (
+                        <button
+                          key={action.value}
+                          className={`btn-action${action.primary ? ' primary' : ''}`}
+                          onClick={() => msg.isFinal ? processAction(msg.id, action, null) : processAction(msg.id, action, msg.accountId)}
+                        >
+                          {action.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {waitingManual && (
+              <div className="msg-agent">
+                <div className="agent-label">Tax agent</div>
+                <div className="bubble-agent">
+                  {waitingManual.label}
+                  <div className="manual-input-row">
+                    <input
+                      type="number"
+                      placeholder="e.g. 6500"
+                      value={manualVal}
+                      onChange={e => setManualVal(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && submitManual()}
+                      autoFocus
+                    />
+                    <button className="btn-action primary" onClick={submitManual}>Set</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="chat-input-bar">
+            <input
+              type="text"
+              placeholder="Type a correction or question…"
+              value={inputVal}
+              onChange={e => setInputVal(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && sendFreeText()}
+            />
+            <button className="send-btn" onClick={sendFreeText}>Send</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── ExportScreen ─────────────────────────────────────────────────────────
+    function ExportScreen({ accounts, taxYear, fxRate, credentials, onBack }) {
+      const active = accounts.filter(a => a.status !== 'closed');
+      const totalMax = active.reduce((s, a) => s + (a.newMax || 0), 0);
+      const totalYearEnd = active.reduce((s, a) => s + (a.newYearEnd || 0), 0);
+      const flagged = accounts.filter(a => a.notes).length;
+
+      function downloadJSON() {
+        const data = {
+          fbar: {
+            taxYear,
+            filedBy: credentials.fullName || 'N/A',
+            fxRate,
+            fxRateDate: `Dec 31, ${taxYear}`,
+            totalMaxValueUSD: totalMax,
+            totalYearEndValueUSD: totalYearEnd,
+            accounts: active.map(a => ({
+              institution: a.name,
+              accountNumber: a.number,
+              type: a.type,
+              currency: a.currency,
+              maxValueUSD: a.newMax || 0,
+              yearEndValueUSD: a.newYearEnd || 0,
+              status: a.status,
+              notes: a.notes || null
+            }))
+          }
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `FBAR_${taxYear}_data.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      return (
+        <div className="export-main">
+          <button className="nav-back" onClick={onBack}>← Confirm</button>
+          <div className="page-title">Export FBAR {taxYear}</div>
+          <div className="page-sub">Review summary and download your FBAR data for BSA e-filing.</div>
+
+          {flagged > 0 && (
+            <div className="warning-banner">
+              ⚠ {flagged} account{flagged > 1 ? 's' : ''} flagged — review before filing. These are using prior year values or have notes attached.
+            </div>
+          )}
+
+          <div className="export-summary">
+            <div className="export-row">
+              <span className="export-label">Tax year</span>
+              <span className="export-val">{taxYear}</span>
+            </div>
+            <div className="export-row">
+              <span className="export-label">Accounts reported</span>
+              <span className="export-val">{active.length}</span>
+            </div>
+            <div className="export-row">
+              <span className="export-label">Total maximum value</span>
+              <span className="export-val">{fmtUSD(totalMax)}</span>
+            </div>
+            <div className="export-row">
+              <span className="export-label">Total year-end value</span>
+              <span className="export-val">{fmtUSD(totalYearEnd)}</span>
+            </div>
+            <div className="export-row">
+              <span className="export-label">Exchange rate</span>
+              <span className="export-val">₹{fxRate.toFixed(2)} / $1 (Dec 31, {taxYear})</span>
+            </div>
+            {credentials.fullName && (
+              <div className="export-row">
+                <span className="export-label">Account holder</span>
+                <span className="export-val">{credentials.fullName}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="actions" style={{marginBottom: 24}}>
+            <button className="btn-primary" onClick={downloadJSON}>
+              Download FBAR data (JSON)
+            </button>
+            <span style={{fontSize:12, color:'var(--text3)'}}>PDF export coming soon</span>
+          </div>
+
+          <div className="section-label" style={{marginBottom:10}}>BSA e-filing steps</div>
+          <ul className="filing-steps">
+            <li>Go to bsaefiling.fincen.treas.gov</li>
+            <li>Log in with your FinCEN account (create one if needed)</li>
+            <li>Select "File an FBAR" → FinCEN 114</li>
+            <li>Enter each account from the data above</li>
+            <li>Sign and submit before April 15 (auto-extended to Oct 15)</li>
+          </ul>
+
+          <div className="version-footer">{APP_VERSION}</div>
+        </div>
+      );
+    }
+
+    // ─── App ──────────────────────────────────────────────────────────────────
+    function App() {
+      const [step, setStep] = useState('setup');
+      const [taxYear, setTaxYear] = useState(new Date().getFullYear() - 1);
+      const [credentials, setCredentials] = useState({ pan: '', dob: '', fullName: '' });
+      const [scanSources, setScanSources] = useState({ gmail: false, drive: false, local: false });
+      const [localFolder, setLocalFolder] = useState('~/Documents/tax-agent/inbox');
+      const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gemini_key') || '');
+      const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem('google_client_id') || '');
+      const [gmailToken, setGmailToken] = useState(() => sessionStorage.getItem('gmail_token') || null);
+      const [priorFbarFile, setPriorFbarFile] = useState(null);
+      const [uploadedStatements, setUploadedStatements] = useState([]);
+      const [priorManualAccounts, setPriorManualAccounts] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('fbar_prior_manual') || '[]'); } catch(_) { return []; }
+      });
+      const [accounts, setAccounts] = useState([]);
+      const [fxRate, setFxRate] = useState(83.97);
+
+      // Helpers: File ↔ sessionStorage (base64)
+      async function fileToSession(file) {
+        return new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = e => res({ name: file.name, type: file.type, data: e.target.result.split(',')[1] });
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+      }
+      function sessionToFile({ name, type, data }) {
+        const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+        return new File([bytes], name, { type });
+      }
+
+      // Restore files on mount
+      useEffect(() => {
+        const saved = localStorage.getItem('fbar_creds');
+        if (saved) { try { setCredentials(JSON.parse(saved)); } catch(_) {} }
+        try {
+          const f = sessionStorage.getItem('prior_fbar_file');
+          if (f) setPriorFbarFile(sessionToFile(JSON.parse(f)));
+        } catch(_) {}
+        try {
+          const s = sessionStorage.getItem('uploaded_statements');
+          if (s) setUploadedStatements(JSON.parse(s).map(sessionToFile));
+        } catch(_) {}
+      }, []);
+      useEffect(() => {
+        if (credentials.pan || credentials.fullName) {
+          localStorage.setItem('fbar_creds', JSON.stringify(credentials));
+        }
+      }, [credentials]);
+      useEffect(() => {
+        localStorage.setItem('fbar_prior_manual', JSON.stringify(priorManualAccounts));
+      }, [priorManualAccounts]);
+      useEffect(() => {
+        if (gmailToken) sessionStorage.setItem('gmail_token', gmailToken);
+        else sessionStorage.removeItem('gmail_token');
+      }, [gmailToken]);
+      useEffect(() => {
+        if (priorFbarFile) {
+          fileToSession(priorFbarFile).then(d => sessionStorage.setItem('prior_fbar_file', JSON.stringify(d))).catch(() => {});
+        } else {
+          sessionStorage.removeItem('prior_fbar_file');
+        }
+      }, [priorFbarFile]);
+      useEffect(() => {
+        if (uploadedStatements.length > 0) {
+          Promise.all(uploadedStatements.map(fileToSession))
+            .then(arr => sessionStorage.setItem('uploaded_statements', JSON.stringify(arr)))
+            .catch(() => {});
+        } else {
+          sessionStorage.removeItem('uploaded_statements');
+        }
+      }, [uploadedStatements]);
+
+      function navigate(target) {
+        if (typeof target === 'string' && STEPS.includes(target)) { setStep(target); return; }
+        const cur = STEPS.indexOf(step);
+        const next = STEPS[cur + 1];
+        if (next) setStep(next);
+      }
+
+      function goBack() {
+        const cur = STEPS.indexOf(step);
+        // scan goes back to setup; all others go to prior step
+        if (cur > 0) setStep(STEPS[cur - 1]);
+      }
+
+      const initials = credentials.fullName
+        ? credentials.fullName.split(' ').slice(0,2).map(w => w[0]).join('').toUpperCase()
+        : 'JA';
+
+      // Acquire (or silently refresh) a Gmail access token via GIS
+      const gmailRefreshTimer = useRef(null);
+
+      function acquireGmailToken(interactive = false) {
+        if (!googleClientId || !window.google?.accounts?.oauth2) return;
+        const client = window.google.accounts.oauth2.initTokenClient({
+          client_id: googleClientId,
+          scope: 'https://www.googleapis.com/auth/gmail.readonly',
+          callback: (resp) => {
+            if (resp.error) {
+              if (interactive) alert('OAuth error: ' + resp.error);
+              return;
+            }
+            setGmailToken(resp.access_token);
+            // Schedule silent refresh at 55 minutes (token lasts 1 hour)
+            if (gmailRefreshTimer.current) clearTimeout(gmailRefreshTimer.current);
+            gmailRefreshTimer.current = setTimeout(() => acquireGmailToken(false), 55 * 60 * 1000);
+          }
+        });
+        // prompt:'' = silent if already consented, shows popup only if interactive=true
+        client.requestAccessToken({ prompt: interactive ? 'consent' : '' });
+      }
+
+      function connectGmail() {
+        if (!googleClientId) return;
+        if (!window.google?.accounts?.oauth2) {
+          alert('Google Identity Services still loading. Try again in a moment.');
+          return;
+        }
+        acquireGmailToken(true);
+      }
+
+      // On load: if Client ID is saved, silently try to restore the token
+      // (works if user is logged into Google and previously granted access)
+      useEffect(() => {
+        if (!googleClientId) return;
+        // Wait for GIS to load
+        const tryAuto = () => {
+          if (window.google?.accounts?.oauth2) {
+            acquireGmailToken(false);
+          } else {
+            setTimeout(tryAuto, 500);
+          }
+        };
+        setTimeout(tryAuto, 500);
+        return () => { if (gmailRefreshTimer.current) clearTimeout(gmailRefreshTimer.current); };
+      }, [googleClientId]);
+
+      const screenProps = { taxYear, fxRate, credentials, accounts, setAccounts, onNext: navigate, onBack: goBack };
+
+      return (
+        <div className="shell">
+          {window.location.protocol === 'file:' && (
+            <div style={{background:'#7c2d12', color:'#fef3c7', padding:'10px 20px', fontSize:13, display:'flex', alignItems:'center', gap:10}}>
+              <strong>⚠ Wrong origin:</strong> Open via <code style={{background:'rgba(0,0,0,0.3)', padding:'1px 6px', borderRadius:4}}>http://localhost:8080</code> — run <code style={{background:'rgba(0,0,0,0.3)', padding:'1px 6px', borderRadius:4}}>cd ~/Claude/projects/tax-agent && python3 -m http.server 8080</code> then reload.
+            </div>
+          )}
+          <TopBar step={step} taxYear={taxYear} setTaxYear={setTaxYear} initials={initials} setStep={setStep}/>
+          {step === 'setup' && (
+            <SetupScreen
+              credentials={credentials} setCredentials={setCredentials}
+              scanSources={scanSources} setScanSources={setScanSources}
+              localFolder={localFolder} setLocalFolder={setLocalFolder}
+              geminiKey={geminiKey} setGeminiKey={setGeminiKey}
+              googleClientId={googleClientId} setGoogleClientId={setGoogleClientId}
+              gmailToken={gmailToken} setGmailToken={setGmailToken} connectGmail={connectGmail}
+              priorFbarFile={priorFbarFile} setPriorFbarFile={setPriorFbarFile}
+              uploadedStatements={uploadedStatements} setUploadedStatements={setUploadedStatements}
+              priorManualAccounts={priorManualAccounts} setPriorManualAccounts={setPriorManualAccounts}
+              taxYear={taxYear} onNext={navigate}
+            />
+          )}
+          {step === 'scan' && (
+            <ScanScreen
+              taxYear={taxYear} geminiKey={geminiKey}
+              gmailToken={gmailToken} setGmailToken={setGmailToken}
+              priorFbarFile={priorFbarFile} uploadedStatements={uploadedStatements}
+              priorManualAccounts={priorManualAccounts}
+              setAccounts={setAccounts} setFxRate={setFxRate}
+              onNext={navigate} onBack={goBack}
+            />
+          )}
+          {step === 'review' && <ReviewScreen {...screenProps}/>}
+          {step === 'confirm' && <ConfirmScreen {...screenProps}/>}
+          {step === 'export' && <ExportScreen {...screenProps}/>}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>
