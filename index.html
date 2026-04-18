@@ -535,19 +535,26 @@
         }
       }
 
-      // Find datasets XML among decompressed chunks
-      // The FinCEN PDF contains TWO xfa:datasets streams:
-      //   1. The schema/template (dd:dataDescription) — all empty self-closing elements
-      //   2. The data stream (<xfa:data> with real values) — this is the one we want
+      // Find datasets XML among decompressed chunks.
+      // The FinCEN PDF has TWO xfa:datasets streams:
+      //   1. Schema/template — has <dd:dataDescription>, no <xfa:data> with real content
+      //   2. Data stream    — has <xfa:data> wrapping the actual form values
+      // Use <xfa:data> as the POSITIVE signal (it only appears in the data stream).
       console.log(`[tax-agent] XFA: scanning ${chunks.length} streams`);
       let xfaSchemaCount = 0, xfaDataCount = 0;
       for (let si = 0; si < chunks.length; si++) {
         const chunk = chunks[si];
         const text = await tryDecompress(chunk);
         if (!text) { console.log(`[tax-agent] XFA: stream ${si} — decompression failed (size ${chunk.length})`); continue; }
-        if (!text.includes('xfa:datasets') && !text.includes('ffbar:BSAForm') && !text.includes('xfa:data')) continue;
-        if (text.includes('dd:dataDescription')) { xfaSchemaCount++; console.log(`[tax-agent] XFA: stream ${si} — schema (skipped)`); continue; }
-        if (!text.includes('xfa:datasets') || !text.includes('ffbar:BSAForm')) { console.log(`[tax-agent] XFA: stream ${si} — xfa but not BSA form`); continue; }
+        // Quick pre-filter: must mention the BSA form namespace/prefix
+        if (!text.includes('ffbar:BSAForm') && !text.includes('xfa:datasets')) continue;
+        // Data stream has <xfa:data>; schema stream does not (or has it empty/absent)
+        const hasDataEl = text.includes('<xfa:data>') || text.includes('<xfa:data ');
+        if (!hasDataEl) {
+          xfaSchemaCount++;
+          console.log(`[tax-agent] XFA: stream ${si} — schema (skipped), length: ${text.length}`);
+          continue;
+        }
         xfaDataCount++;
         console.log('[tax-agent] XFA: found data stream', si, 'length:', text.length, 'preview:', text.slice(0, 200));
 
