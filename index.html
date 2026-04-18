@@ -1504,18 +1504,12 @@ Return JSON array only (no markdown, no explanation):
         }
 
         async function runReal() {
-          // Step 0: Validate Gmail token before doing any work
-          if (isGmail) {
-            const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile',
-              { headers: { Authorization: `Bearer ${gmailToken}` } });
-            if (r.status === 401) throw new GmailTokenExpiredError();
-          }
-
-          // Step 1: FX rate
+          // FBAR-only mode: parse the prior FBAR and go straight to review.
+          // Gmail scan and statement parsing are disabled until local folder
+          // debug workflow is complete.
           setItems([
-            ...(priorFbarFile ? [{ id:'fbar', label:`Parsing prior FBAR: ${priorFbarFile.name}`, status:'pending' }] : []),
             { id:'fx', label:'Fetching INR → USD exchange rate', status:'pending' },
-            { id:'match', label:'Matching accounts', status:'pending' }
+            ...(priorFbarFile ? [{ id:'fbar', label:`Parsing prior FBAR: ${priorFbarFile.name}`, status:'pending' }] : []),
           ]);
 
           setItemStatus('fx', 'active');
@@ -1524,47 +1518,10 @@ Return JSON array only (no markdown, no explanation):
           setFxRate(rate);
           setItemStatus('fx', 'done', `₹${rate.toFixed(2)}/$1`);
 
-          // Step 2: Parse prior FBAR
           const { accounts: priorAccounts, failed: fbarFailed } = await parsePriorFbarStep();
           if (cancelled) return;
 
-          // Step 3: Scan sources
-          let scannedList = [];
-
-          if (isGmail) {
-            scannedList = await runGmailScan(priorAccounts);
-          }
-
-          // Also parse any manually dropped files
-          if (uploadedStatements.length > 0) {
-            uploadedStatements.forEach((f, i) => {
-              setItems(prev => {
-                const idx = prev.findIndex(it => it.id === 'match');
-                const newItem = { id:`stmt_${i}`, label:`Parsing: ${f.name}`, status:'pending', file: f };
-                return [...prev.slice(0, idx), newItem, ...prev.slice(idx)];
-              });
-            });
-            for (let i = 0; i < uploadedStatements.length; i++) {
-              if (cancelled) return;
-              setItemStatus(`stmt_${i}`, 'active');
-              try {
-                const parsedArr = await parseStatement(uploadedStatements[i], geminiKey);
-                const valid = parsedArr.filter(r => r.institution_name);
-                valid.forEach(r => scannedList.push(r));
-                setItemStatus(`stmt_${i}`, 'done', valid.length > 0 ? valid.map(r => r.institution_name).join(', ') : 'no accounts found');
-              } catch(e) {
-                setItemStatus(`stmt_${i}`, 'error', e.message.slice(0, 60));
-              }
-            }
-          }
-
-          if (cancelled) return;
-
-          // Remove the match placeholder — matching happens when user clicks Proceed
-          setItems(prev => prev.filter(it => it.id !== 'match'));
-
-          // Store intermediate results and let user review before proceeding
-          setScanData({ priorAccounts, scannedList, rate, fbarFailed });
+          setScanData({ priorAccounts, scannedList: [], rate, fbarFailed });
           setDone(true);
         }
 
