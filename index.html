@@ -537,7 +537,10 @@
 
       // Try to extract accounts from a decompressed XML text.
       // Returns array of accounts (possibly empty if this is the schema stream).
-      const TYPE_MAP = { A: 'bank', B: 'bank', S: 'brokerage', M: 'mf', Z: 'other', C: 'other' };
+      // FinCEN 114 AccountType codes (from BSA filing instructions):
+      // A = Bank/deposit account, B = Securities/brokerage account,
+      // S = Securities (alt), M = Mutual fund, Z = Other, C = Other
+      const TYPE_MAP = { A: 'bank', B: 'brokerage', S: 'brokerage', M: 'mf', Z: 'other', C: 'other' };
       const ns = 'http://www.fincen.gov/bsa/ffbar/2011-06-01';
 
       function xget(el, localName) {
