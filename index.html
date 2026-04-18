@@ -551,8 +551,9 @@
       }
 
       function tryExtractFromText(text) {
-        // Normalize newlines before > so DOMParser handles tags like <ffbar:FinInstName\n>
-        const normalized = text.replace(/(\w)\n>/g, '$1>');
+        // Every tag in this PDF has a newline before >, e.g. <ffbar:FinInstName\n>value</ffbar:FinInstName\n>
+        // Strip ALL \n> → > so DOMParser sees valid XML.
+        const normalized = text.replace(/\n>/g, '>');
         const doc = new DOMParser().parseFromString(normalized, 'text/xml');
         const accounts = [];
         for (const tag of ['FinAcctOwnedSeparately', 'FinAcctOwnedJointly', 'FinAcctSigAuth']) {
