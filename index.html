@@ -191,8 +191,10 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const APP_VERSION = 'v1.02';
+    const APP_VERSION = 'v1.03';
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -660,6 +662,7 @@ WHAT IS AN ACCOUNT (extract these):
 - Demat account at a depository participant (Zerodha, HDFC Securities, Angel One, ICICI Direct…) → 1 entry, institution = broker name, account_number = last 4 of BO client ID
 - Mutual fund folio at an AMC → 1 entry per AMC (e.g. "Aditya Birla Sun Life MF"), account_number = last 4 of folio number
 - PMS / advisory portfolio (Itus Capital, Motilal Oswal PMS…) → 1 entry per portfolio account
+- AIF (Alternative Investment Fund, e.g. Clarus Capital I, Edelweiss AIF…) → 1 entry, institution = fund name, account_number = last 4 of folio number, account_type = "other"
 
 WHAT IS NOT AN ACCOUNT (never extract these):
 - Infosys, Reliance, TCS, HDFC Bank, any company stock → these are HOLDINGS inside a demat account
@@ -1054,6 +1057,7 @@ Return JSON array only (no markdown, no explanation):
                            priorFbarFile, setPriorFbarFile, taxYear, onNext }) {
       const fileRef = useRef();
       const priorYear = taxYear - 1;
+      const [editingKey, setEditingKey] = useState(!geminiKey);
 
       function handleCred(key, val) {
         setCredentials(prev => ({ ...prev, [key]: val }));
@@ -1083,9 +1087,22 @@ Return JSON array only (no markdown, no explanation):
 
           <div className="section-label">Gemini API key</div>
           <div className="field-row">
-            <input type="password" placeholder="AIza… (stored locally, used only to parse PDFs/XLS via Google AI)"
-              value={geminiKey}
-              onChange={e => { setGeminiKey(e.target.value); localStorage.setItem('gemini_key', e.target.value); }}/>
+            {geminiKey && !editingKey ? (
+              <div style={{display:'flex', alignItems:'center', gap:10, padding:'8px 10px', border:'0.5px solid var(--green-border)', borderRadius:'var(--radius)', background:'var(--green-bg)'}}>
+                <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ Key set</span>
+                <span style={{fontSize:12, color:'var(--green-text)', fontFamily:'monospace', opacity:0.7}}>···{geminiKey.slice(-4)}</span>
+                <button className="btn-ghost" style={{fontSize:12, marginLeft:'auto', padding:'3px 10px'}} onClick={() => setEditingKey(true)}>Update key</button>
+              </div>
+            ) : (
+              <div>
+                <input type="password" placeholder="AIza… (stored locally, used only to parse PDFs/XLS via Google AI)"
+                  value={geminiKey} autoFocus={editingKey}
+                  onChange={e => { setGeminiKey(e.target.value); localStorage.setItem('gemini_key', e.target.value); }}/>
+                {geminiKey && editingKey && (
+                  <button className="btn-ghost" style={{fontSize:12, marginTop:6}} onClick={() => setEditingKey(false)}>Cancel</button>
+                )}
+              </div>
+            )}
             <div className="field-hint">Required to read statement files. Get a free key at aistudio.google.com/app/apikey</div>
           </div>
 
@@ -1124,17 +1141,20 @@ Return JSON array only (no markdown, no explanation):
     }
 
     // ─── AccountsScreen ───────────────────────────────────────────────────────
-    function AccountsScreen({ taxYear, priorFbarFile, geminiKey, setFinalAccounts, setFxRate, onNext, onBack }) {
+    function AccountsScreen({ taxYear, priorFbarFile, geminiKey, initialAccounts, setFinalAccounts, setFxRate, onNext, onBack }) {
       const priorYear = taxYear - 1;
-      const [loading, setLoading] = useState(true);
+      const [loading, setLoading] = useState(initialAccounts.length === 0);
       const [error, setError]   = useState(null);
-      const [accts, setAccts]   = useState([]);
+      const [accts, setAccts]   = useState(initialAccounts);
       const [showAdd, setShowAdd] = useState(false);
-      const [newRow, setNewRow] = useState({ name:'', type:'bank', number:'', via:'' });
+      const [newRow, setNewRow] = useState({ name:'', type:'other', number:'' });
+
+      // Sync to App state on every change so navigating back doesn't lose data
+      useEffect(() => { setFinalAccounts(accts); }, [accts]);
 
       useEffect(() => {
+        if (initialAccounts.length > 0) return; // already loaded, don't clobber
         async function load() {
-          // Fetch FX rate
           let rate = 83.97;
           try {
             const r = await fetch(`${WORKER_URL}/api/fx?year=${taxYear}`);
@@ -1156,7 +1176,6 @@ Return JSON array only (no markdown, no explanation):
                   currency: 'INR',
                   include: true,
                   source: 'fbar',
-                  via: null,
                   priorMax: a.max_value_usd || null,
                   priorYearEnd: a.year_end_value_usd || null,
                   newMax: null, newYearEnd: null,
@@ -1184,12 +1203,11 @@ Return JSON array only (no markdown, no explanation):
           type: newRow.type,
           ownership: 'sole', joint_owner: null, currency: 'INR',
           include: true, source: 'manual',
-          via: newRow.via.trim() || null,
           priorMax: null, priorYearEnd: null,
           newMax: null, newYearEnd: null,
           matchFile: null, matchStatus: 'pending',
         }]);
-        setNewRow({ name:'', type:'bank', number:'', via:'' });
+        setNewRow({ name:'', type:'other', number:'' });
         setShowAdd(false);
       }
 
@@ -1275,8 +1293,10 @@ Return JSON array only (no markdown, no explanation):
               <div style={{display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:10, marginBottom:10}}>
                 <div>
                   <label style={{fontSize:11, color:'var(--text3)', display:'block', marginBottom:4}}>Institution name</label>
-                  <input type="text" placeholder="e.g. HDFC Bank, Zerodha, ABSLMF"
-                    value={newRow.name} onChange={e => setNewRow(p => ({...p, name: e.target.value}))}
+                  <input type="text" placeholder="e.g. HDFC Bank, Zerodha, Clarus Capital I"
+                    value={newRow.name} autoFocus
+                    onChange={e => setNewRow(p => ({...p, name: e.target.value}))}
+                    onKeyDown={e => e.key === 'Enter' && addAccount()}
                     style={{width:'100%', padding:'7px 10px', border:'0.5px solid var(--border2)', borderRadius:'var(--radius)', fontSize:13}}/>
                 </div>
                 <div>
@@ -1286,21 +1306,16 @@ Return JSON array only (no markdown, no explanation):
                     <option value="bank">Bank</option>
                     <option value="brokerage">Brokerage</option>
                     <option value="mf">Mutual Fund</option>
-                    <option value="other">Other</option>
+                    <option value="other">Other (AIF/PMS/FD)</option>
                   </select>
                 </div>
                 <div>
-                  <label style={{fontSize:11, color:'var(--text3)', display:'block', marginBottom:4}}>Acct # (last 4)</label>
-                  <input type="text" placeholder="1234" maxLength={20}
+                  <label style={{fontSize:11, color:'var(--text3)', display:'block', marginBottom:4}}>Acct / Folio # (optional)</label>
+                  <input type="text" placeholder="last 4 digits" maxLength={20}
                     value={newRow.number} onChange={e => setNewRow(p => ({...p, number: e.target.value}))}
+                    onKeyDown={e => e.key === 'Enter' && addAccount()}
                     style={{width:'100%', padding:'7px 10px', border:'0.5px solid var(--border2)', borderRadius:'var(--radius)', fontSize:13}}/>
                 </div>
-              </div>
-              <div style={{marginBottom:10}}>
-                <label style={{fontSize:11, color:'var(--text3)', display:'block', marginBottom:4}}>Held via intermediary (optional) — e.g. Itus Capital, CAMS, Zerodha</label>
-                <input type="text" placeholder="Leave blank if direct account"
-                  value={newRow.via} onChange={e => setNewRow(p => ({...p, via: e.target.value}))}
-                  style={{width:'100%', padding:'7px 10px', border:'0.5px solid var(--border2)', borderRadius:'var(--radius)', fontSize:13}}/>
               </div>
               <div style={{display:'flex', gap:8}}>
                 <button className="btn-primary" style={{fontSize:12}} onClick={addAccount}>Add</button>
@@ -1323,44 +1338,56 @@ Return JSON array only (no markdown, no explanation):
     // ─── MatchScreen ──────────────────────────────────────────────────────────
     function MatchScreen({ taxYear, accounts, setAccounts, geminiKey, fxRate, onNext, onBack }) {
       const priorYear = taxYear - 1;
-      const [stmtFiles, setStmtFiles] = useState([]);  // File objects
+      const [stmtFiles, setStmtFiles] = useState([]);
       const [matching, setMatching]   = useState(false);
+      const [matchDone, setMatchDone] = useState(false);
       const [matchLog, setMatchLog]   = useState([]);
       const [rows, setRows]           = useState(() =>
         accounts.filter(a => a.include).map(a => ({...a, matchStatus: 'pending', matchFile: null}))
       );
       const stmtRef = useRef();
+      // Keep a ref so runMatch always reads latest rows
+      const rowsRef = useRef(rows);
+      useEffect(() => { rowsRef.current = rows; }, [rows]);
 
       // Fuzzy: does filename likely correspond to this account?
-      function filenameMatch(accountName, via, filename) {
+      function filenameMatch(accountName, filename) {
         const fn = filename.toLowerCase();
-        const words = (accountName + ' ' + (via || '')).toLowerCase()
-          .split(/[\s\-_.,/]+/).filter(w => w.length > 3);
+        const words = (accountName || '').toLowerCase()
+          .split(/[\s\-_.,/()\[\]]+/).filter(w => w.length > 3);
         return words.some(w => fn.includes(w));
       }
 
-      async function runMatch(files) {
+      // Improved normInst comparison — exact OR substring
+      function instMatch(parsedName, rowName) {
+        const p = normInst(parsedName);
+        const r = normInst(rowName);
+        return p === r || p.includes(r) || r.includes(p);
+      }
+
+      async function runMatch() {
+        const files = stmtFiles;
         if (!geminiKey || files.length === 0) return;
         setMatching(true);
+        setMatchDone(false);
         const log = [];
+        const currentRows = rowsRef.current;
 
-        for (const row of rows) {
-          // Find candidate files by fuzzy name match
-          const candidates = files.filter(f => filenameMatch(row.name, row.via, f.name));
-          // Also check all files if no name-match (handles CPA summaries with generic names)
+        for (const row of currentRows) {
+          // Find candidate files by fuzzy name match first; fall back to all files
+          const candidates = files.filter(f => filenameMatch(row.name, f.name));
           const toTry = candidates.length > 0 ? candidates : files;
           let matched = false;
 
           for (const file of toTry) {
             try {
+              log.push(`  scanning ${file.name} for "${row.name}"…`);
               const parsed = await parseStatement(file, geminiKey);
-              const hit = parsed.find(p =>
-                normInst(p.institution_name) === normInst(row.name) ||
-                (row.via && normInst(p.institution_name) === normInst(row.via))
-              );
+              log.push(`  → Gemini returned ${parsed.length} account(s): ${parsed.map(p=>p.institution_name).join(', ')}`);
+              const hit = parsed.find(p => instMatch(p.institution_name, row.name));
               if (hit) {
-                const maxInr  = hit.peak_balance_inr || hit.year_end_balance_inr || 0;
-                const yeInr   = hit.year_end_balance_inr || 0;
+                const maxInr = hit.peak_balance_inr || hit.year_end_balance_inr || 0;
+                const yeInr  = hit.year_end_balance_inr || hit.peak_balance_inr || 0;
                 setRows(prev => prev.map(r => r.id === row.id ? {
                   ...r,
                   newMax: Math.round(maxInr / fxRate),
@@ -1368,47 +1395,45 @@ Return JSON array only (no markdown, no explanation):
                   matchFile: file.name,
                   matchStatus: 'matched',
                 } : r));
-                log.push(`✓ ${row.name} ← ${file.name}`);
+                log.push(`✓ ${row.name} ← ${file.name} (max ₹${maxInr.toLocaleString('en-IN')})`);
                 matched = true;
                 break;
               }
             } catch(e) {
-              log.push(`✗ ${file.name}: ${e.message.slice(0,60)}`);
+              log.push(`✗ ${file.name}: ${e.message.slice(0,80)}`);
             }
           }
           if (!matched) {
             setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
-            log.push(`? ${row.name} — no match found, enter manually`);
+            log.push(`? ${row.name} — no match, enter manually`);
           }
         }
 
         setMatchLog(log);
         setMatching(false);
+        setMatchDone(true);
       }
 
-      function handleFiles(fileList) {
-        const files = Array.from(fileList).filter(f => /\.(pdf|xls|xlsx|csv)$/i.test(f.name));
-        setStmtFiles(prev => {
-          const names = new Set(prev.map(f => f.name));
-          return [...prev, ...files.filter(f => !names.has(f.name))];
-        });
-        runMatch([...stmtFiles, ...files.filter(f => !/x/.test(''))]);  // will re-run below via effect
+      function handleDrop(e) {
+        e.preventDefault();
+        addFiles(Array.from(e.dataTransfer.files));
       }
 
-      function handleDrop(e) { e.preventDefault(); handleFilesAndRun(Array.from(e.dataTransfer.files)); }
-
-      async function handleFilesAndRun(newFiles) {
+      function addFiles(newFiles) {
         const valid = newFiles.filter(f => /\.(pdf|xls|xlsx|csv)$/i.test(f.name));
         if (!valid.length) return;
-        const merged = [...stmtFiles, ...valid.filter(f => !stmtFiles.find(x => x.name === f.name))];
-        setStmtFiles(merged);
-        await runMatch(merged);
+        setStmtFiles(prev => {
+          const names = new Set(prev.map(f => f.name));
+          return [...prev, ...valid.filter(f => !names.has(f.name))];
+        });
+        setMatchDone(false); // reset so Start matching shows again
       }
 
       function updateRow(id, field, val) {
         const num = parseFloat(val.replace(/[^0-9.]/g,''));
         setRows(prev => prev.map(r => r.id === id
-          ? {...r, [field]: isNaN(num) ? null : num, matchStatus: r.matchStatus === 'pending' ? 'manual' : r.matchStatus}
+          ? {...r, [field]: isNaN(num) ? null : num,
+              matchStatus: r.matchStatus === 'matched' ? 'matched' : 'manual'}
           : r));
       }
 
@@ -1427,7 +1452,7 @@ Return JSON array only (no markdown, no explanation):
           <div className="top-row">
             <div>
               <div className="page-title">Match {taxYear} statements</div>
-              <div className="page-sub">Drop statement files — PDF, XLS, or CSV. Gemini reads each file and matches values to accounts.</div>
+              <div className="page-sub">Drop statement files, then click Start matching. Edit any value directly in the table.</div>
             </div>
             <div className="stat-row">
               {matched > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--green-text)'}}>{matched}</div><div className="stat-label">matched</div></div>}
@@ -1436,31 +1461,39 @@ Return JSON array only (no markdown, no explanation):
             </div>
           </div>
 
-          <div
-            style={{border:`0.5px dashed var(--border2)`, borderRadius:'var(--radius)', padding:'16px 20px',
-              background:'var(--bg2)', marginBottom:16, cursor:'pointer'}}
-            onDrop={handleDrop} onDragOver={e => e.preventDefault()}
-            onClick={() => stmtRef.current.click()}
-          >
-            {stmtFiles.length > 0 ? (
-              <div>
-                <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ {stmtFiles.length} file{stmtFiles.length !== 1 ? 's' : ''} loaded</span>
-                <span style={{fontSize:12, color:'var(--text3)', marginLeft:10}}>{stmtFiles.map(f=>f.name).join(', ').slice(0,80)}{stmtFiles.length > 3 ? '…' : ''}</span>
-                {matching && <span style={{fontSize:12, color:'var(--blue-text)', marginLeft:10}}>matching…</span>}
-              </div>
-            ) : (
-              <div style={{textAlign:'center'}}>
-                <div style={{fontSize:13, color:'var(--text2)', marginBottom:4}}>Drop statement files here, or click to browse</div>
-                <div style={{fontSize:12, color:'var(--text3)'}}>PDF · XLS · XLSX · CSV — bank statements, broker reports, CAMS, CPA summaries</div>
-              </div>
+          <div style={{display:'flex', gap:10, marginBottom:16, alignItems:'flex-start'}}>
+            <div style={{flex:1, border:`0.5px dashed var(--border2)`, borderRadius:'var(--radius)', padding:'14px 18px',
+                background:'var(--bg2)', cursor:'pointer'}}
+              onDrop={handleDrop} onDragOver={e => e.preventDefault()}
+              onClick={() => stmtRef.current.click()}>
+              {stmtFiles.length > 0 ? (
+                <div>
+                  <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ {stmtFiles.length} file{stmtFiles.length !== 1 ? 's' : ''}</span>
+                  <span style={{fontSize:12, color:'var(--text3)', marginLeft:10}}>{stmtFiles.map(f=>f.name).join(', ').slice(0,100)}{stmtFiles.reduce((s,f)=>s+f.name.length,0)>100?'…':''}</span>
+                  <span style={{fontSize:12, color:'var(--text3)', marginLeft:6}}>· click to add more</span>
+                </div>
+              ) : (
+                <div>
+                  <div style={{fontSize:13, color:'var(--text2)', marginBottom:3}}>Drop statement files here, or click to browse</div>
+                  <div style={{fontSize:12, color:'var(--text3)'}}>PDF · XLS · XLSX · CSV</div>
+                </div>
+              )}
+            </div>
+            {stmtFiles.length > 0 && !matching && (
+              <button className="btn-primary" style={{whiteSpace:'nowrap', alignSelf:'center'}} onClick={runMatch} disabled={!geminiKey}>
+                {matchDone ? 'Re-match' : 'Start matching'}
+              </button>
             )}
+            {matching && <span style={{fontSize:13, color:'var(--blue-text)', alignSelf:'center'}}>
+              <span className="spin-icon">↻</span> Matching…
+            </span>}
           </div>
           <input ref={stmtRef} type="file" accept=".pdf,.xls,.xlsx,.csv" multiple style={{display:'none'}}
-            onChange={e => handleFilesAndRun(Array.from(e.target.files))}/>
+            onChange={e => addFiles(Array.from(e.target.files))}/>
 
           {!geminiKey && (
             <div style={{padding:'10px 14px', background:'var(--amber-bg)', border:'0.5px solid var(--amber-border)', borderRadius:'var(--radius)', fontSize:12, color:'var(--amber-text)', marginBottom:14}}>
-              Gemini API key not set — enter it on the Setup screen to enable automatic matching. You can still enter values manually below.
+              Gemini API key not set — go back to Setup to add it, or enter values manually below.
             </div>
           )}
 
@@ -1472,7 +1505,7 @@ Return JSON array only (no markdown, no explanation):
                   <th rowSpan={2}>Acct #</th>
                   <th rowSpan={2}>Type</th>
                   <th colSpan={2} className="prior">{priorYear} prior</th>
-                  <th colSpan={2} className="new-grp">{taxYear} current</th>
+                  <th colSpan={2} className="new-grp">{taxYear} current year (USD)</th>
                   <th rowSpan={2}>Source</th>
                 </tr>
                 <tr>
@@ -1487,35 +1520,30 @@ Return JSON array only (no markdown, no explanation):
                   <tr key={r.id} className={r.matchStatus === 'matched' ? '' : r.matchStatus === 'manual' ? 'row-review' : ''}>
                     <td>
                       <div style={{fontWeight:500, fontSize:13}}>{r.name}</div>
-                      {r.via && <div style={{fontSize:11, color:'var(--text3)'}}>via {r.via}</div>}
                     </td>
                     <td className="mono">{r.number}</td>
                     <td style={{fontSize:12}}>{TYPE_LABELS[r.type] || r.type}</td>
                     <td className="muted pb">{fmtUSD(r.priorMax)}</td>
                     <td className="muted">{fmtUSD(r.priorYearEnd)}</td>
                     <td className="r nb">
-                      {r.matchStatus === 'matched'
-                        ? <span style={{color:'var(--green-text)'}}>{fmtUSD(r.newMax)}</span>
-                        : <input className="edit-cell"
-                            value={r.newMax != null ? String(Math.round(r.newMax)) : ''}
-                            placeholder="—"
-                            onChange={e => updateRow(r.id, 'newMax', e.target.value)}/>
-                      }
+                      <input className="edit-cell"
+                        value={r.newMax != null ? String(Math.round(r.newMax)) : ''}
+                        placeholder="—"
+                        style={r.matchStatus==='matched' ? {color:'var(--green-text)', fontWeight:500} : {}}
+                        onChange={e => updateRow(r.id, 'newMax', e.target.value)}/>
                     </td>
                     <td className="r">
-                      {r.matchStatus === 'matched'
-                        ? <span style={{color:'var(--green-text)'}}>{fmtUSD(r.newYearEnd)}</span>
-                        : <input className="edit-cell"
-                            value={r.newYearEnd != null ? String(Math.round(r.newYearEnd)) : ''}
-                            placeholder="—"
-                            onChange={e => updateRow(r.id, 'newYearEnd', e.target.value)}/>
-                      }
+                      <input className="edit-cell"
+                        value={r.newYearEnd != null ? String(Math.round(r.newYearEnd)) : ''}
+                        placeholder="—"
+                        style={r.matchStatus==='matched' ? {color:'var(--green-text)', fontWeight:500} : {}}
+                        onChange={e => updateRow(r.id, 'newYearEnd', e.target.value)}/>
                     </td>
                     <td>
                       {r.matchFile
-                        ? <span className="chip" title={r.matchFile}>{r.matchFile.slice(0,25)}{r.matchFile.length > 25 ? '…' : ''}</span>
+                        ? <span className="chip" title={r.matchFile}>{r.matchFile.slice(0,22)}{r.matchFile.length > 22 ? '…' : ''}</span>
                         : r.matchStatus === 'manual'
-                        ? <span style={{fontSize:11, color:'var(--amber-text)'}}>manual entry</span>
+                        ? <span style={{fontSize:11, color:'var(--amber-text)'}}>manual</span>
                         : <span style={{color:'var(--text3)', fontSize:11}}>—</span>}
                     </td>
                   </tr>
@@ -1965,6 +1993,82 @@ Return JSON array only (no markdown, no explanation):
       const totalYearEnd = included.reduce((s, a) => s + (a.newYearEnd || 0), 0);
       const noValues = included.filter(a => !a.newMax && !a.newYearEnd).length;
 
+      function downloadPDF() {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+        const pageW = doc.internal.pageSize.getWidth();
+        let y = 18;
+
+        // Header
+        doc.setFontSize(14); doc.setFont(undefined,'bold');
+        doc.text('FinCEN Form 114 — FBAR Reference Summary', pageW/2, y, {align:'center'});
+        y += 7;
+        doc.setFontSize(9); doc.setFont(undefined,'normal');
+        doc.setTextColor(100);
+        doc.text('This document is a reference summary for completing BSA e-filing. It is not the official FinCEN form.', pageW/2, y, {align:'center'});
+        doc.setTextColor(0);
+        y += 8;
+
+        // Filer info
+        doc.setFontSize(10); doc.setFont(undefined,'bold');
+        doc.text('Part I — Filer Information', 14, y); y += 5;
+        doc.setFont(undefined,'normal'); doc.setFontSize(9);
+        const info = [
+          ['Calendar year reported', String(taxYear)],
+          ['Filer name', credentials.fullName || '—'],
+          ['Exchange rate (Dec 31)', `₹${fxRate.toFixed(2)} per USD`],
+          ['Total accounts reported', String(included.length)],
+          ['Total maximum value (USD)', fmtUSD(totalMax)],
+          ['Total year-end value (USD)', fmtUSD(totalYearEnd)],
+        ];
+        info.forEach(([label, val]) => {
+          doc.setTextColor(100); doc.text(label, 14, y);
+          doc.setTextColor(0); doc.text(val, 90, y);
+          y += 5;
+        });
+        y += 4;
+
+        // Accounts table
+        doc.setFontSize(10); doc.setFont(undefined,'bold');
+        doc.text('Part V — Foreign Financial Accounts', 14, y); y += 4;
+
+        doc.autoTable({
+          startY: y,
+          head: [['#', 'Institution', 'Acct #', 'Type', 'Ownership', 'Max Value (USD)', 'Year-End (USD)', 'Source']],
+          body: included.map((a, i) => [
+            i + 1,
+            a.name,
+            a.number || '—',
+            TYPE_LABELS[a.type] || a.type,
+            a.ownership === 'joint' ? 'Joint' : 'Sole',
+            a.newMax != null ? fmtUSD(a.newMax) : 'MISSING',
+            a.newYearEnd != null ? fmtUSD(a.newYearEnd) : 'MISSING',
+            a.matchFile ? a.matchFile.slice(0,20) : (a.source || 'manual'),
+          ]),
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: { fillColor: [30,30,28], fontSize: 8 },
+          columnStyles: {
+            0: {cellWidth:8}, 1: {cellWidth:52}, 2: {cellWidth:20},
+            3: {cellWidth:18}, 4: {cellWidth:16},
+            5: {cellWidth:24, halign:'right'}, 6: {cellWidth:24, halign:'right'},
+            7: {cellWidth:28},
+          },
+          didParseCell: data => {
+            if (data.section === 'body' && (data.column.index === 5 || data.column.index === 6)) {
+              if (data.cell.raw === 'MISSING') data.cell.styles.textColor = [180, 30, 30];
+            }
+          },
+          margin: { left: 14, right: 14 },
+        });
+
+        y = doc.lastAutoTable.finalY + 8;
+        doc.setFontSize(8); doc.setTextColor(120);
+        doc.text('Generated by Tax Agent · jawadayaz.github.io/Tax-Agent · ' + new Date().toLocaleDateString(), 14, y);
+        doc.setTextColor(0);
+
+        doc.save(`FBAR_${taxYear}_reference.pdf`);
+      }
+
       function downloadJSON() {
         const data = {
           fbar: {
@@ -2065,10 +2169,12 @@ Return JSON array only (no markdown, no explanation):
           </div>
 
           <div className="actions" style={{marginBottom: 24}}>
-            <button className="btn-primary" onClick={downloadJSON}>
-              Download FBAR data (JSON)
+            <button className="btn-primary" onClick={downloadPDF}>
+              Download PDF summary
             </button>
-            <span style={{fontSize:12, color:'var(--text3)'}}>PDF export coming soon</span>
+            <button className="btn-secondary" onClick={downloadJSON}>
+              Download JSON
+            </button>
           </div>
 
           <div className="section-label" style={{marginBottom:10}}>BSA e-filing steps</div>
@@ -2168,6 +2274,7 @@ Return JSON array only (no markdown, no explanation):
               taxYear={taxYear}
               priorFbarFile={priorFbarFile}
               geminiKey={geminiKey}
+              initialAccounts={accounts}
               setFinalAccounts={setAccounts}
               setFxRate={setFxRate}
               onNext={navigate}
