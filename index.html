@@ -194,7 +194,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const APP_VERSION = 'v1.03';
+    const APP_VERSION = 'v1.04';
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -1348,22 +1348,7 @@ Return JSON array only (no markdown, no explanation):
       const stmtRef = useRef();
       const runningRef = useRef(false);
 
-      // Fuzzy: does filename likely correspond to this account?
-      function filenameMatch(accountName, filename) {
-        const fn = filename.toLowerCase();
-        const words = (accountName || '').toLowerCase()
-          .split(/[\s\-_.,/()\[\]]+/).filter(w => w.length > 3);
-        return words.some(w => fn.includes(w));
-      }
-
-      // Improved normInst comparison — exact OR substring
-      function instMatch(parsedName, rowName) {
-        const p = normInst(parsedName);
-        const r = normInst(rowName);
-        return p === r || p.includes(r) || r.includes(p);
-      }
-
-      // Snapshot refs so async runMatch always sees current values
+      // Snapshot refs so async runMatch always sees latest state
       const stmtFilesRef = useRef(stmtFiles);
       const rowsSnapRef  = useRef(rows);
       useEffect(() => { stmtFilesRef.current = stmtFiles; }, [stmtFiles]);
@@ -1372,77 +1357,139 @@ Return JSON array only (no markdown, no explanation):
       async function runMatch() {
         if (runningRef.current) return;
         runningRef.current = true;
+
         const files = stmtFilesRef.current;
         const currentRows = rowsSnapRef.current;
         const log = [];
 
-        console.log('[match] starting — files:', files.map(f=>f.name), 'rows:', currentRows.map(r=>r.name));
-
+        // Guard checks — always show log
         if (!geminiKey) {
           setMatchLog(['✗ No Gemini API key — go back to Setup and enter your key.']);
-          setMatchDone(true);
-          runningRef.current = false;
-          return;
+          setMatchDone(true); runningRef.current = false; return;
         }
         if (files.length === 0) {
-          setMatchLog(['✗ No files loaded — drop statement files first.']);
-          setMatchDone(true);
-          runningRef.current = false;
-          return;
+          setMatchLog(['✗ No files — drop statement files above first.']);
+          setMatchDone(true); runningRef.current = false; return;
         }
         if (currentRows.length === 0) {
-          setMatchLog(['✗ No accounts to match — go back to Accounts and add or load accounts.']);
-          setMatchDone(true);
-          runningRef.current = false;
-          return;
+          setMatchLog(['✗ No accounts — go back to Accounts and load or add accounts.']);
+          setMatchDone(true); runningRef.current = false; return;
         }
 
         setMatching(true);
         setMatchDone(false);
 
         try {
-          for (const row of currentRows) {
-            const candidates = files.filter(f => filenameMatch(row.name, f.name));
-            const toTry = candidates.length > 0 ? candidates : files;
-            log.push(`\n[${row.name}] candidates: ${candidates.length > 0 ? candidates.map(f=>f.name).join(', ') : 'none — trying all files'}`);
-            let matched = false;
+          // ── Step 1: read all files as base64 ──────────────────────────────
+          log.push(`Reading ${files.length} file(s)…`);
+          setMatchLog([...log]);
 
-            for (const file of toTry) {
-              try {
-                log.push(`  → parsing ${file.name}…`);
-                const parsed = await parseStatement(file, geminiKey);
-                log.push(`  → Gemini: [${parsed.map(p=>p.institution_name).join(' | ') || 'empty'}]`);
-                const hit = parsed.find(p => instMatch(p.institution_name, row.name));
-                if (hit) {
-                  const maxInr = hit.peak_balance_inr || hit.year_end_balance_inr || 0;
-                  const yeInr  = hit.year_end_balance_inr || hit.peak_balance_inr || 0;
-                  setRows(prev => prev.map(r => r.id === row.id ? {
-                    ...r,
-                    newMax: Math.round(maxInr / fxRate),
-                    newYearEnd: Math.round(yeInr / fxRate),
-                    matchFile: file.name,
-                    matchStatus: 'matched',
-                  } : r));
-                  log.push(`  ✓ matched! max ₹${maxInr.toLocaleString('en-IN')}, yr-end ₹${yeInr.toLocaleString('en-IN')}`);
-                  matched = true;
-                  break;
-                } else {
-                  log.push(`  ✗ no hit (normInst: "${normInst(row.name)}" not in [${parsed.map(p=>normInst(p.institution_name)).join(', ')}])`);
-                }
-              } catch(e) {
-                log.push(`  ✗ error: ${e.message.slice(0,100)}`);
-              }
-            }
-            if (!matched) {
-              setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
-              log.push(`  → manual entry needed`);
+          const fileParts = [];
+          for (const file of files) {
+            try {
+              const b64 = await readFileAsBase64(file);
+              const mime = file.type ||
+                (file.name.endsWith('.pdf')  ? 'application/pdf' :
+                 file.name.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
+                 file.name.endsWith('.xls')  ? 'application/vnd.ms-excel' : 'text/plain');
+              fileParts.push({ b64, mime, name: file.name });
+              log.push(`  ✓ ${file.name}`);
+            } catch(e) {
+              log.push(`  ✗ ${file.name}: ${e.message}`);
             }
           }
-        } catch(outerErr) {
-          log.push(`\n✗ Unexpected error: ${outerErr.message}`);
+
+          if (fileParts.length === 0) {
+            log.push('✗ Could not read any files.'); throw new Error('no files');
+          }
+
+          // ── Step 2: single Gemini call — all files + all accounts ──────────
+          const accountList = currentRows.map((r, i) =>
+            `${i}: ${r.name}${r.number && r.number !== '????' ? ' (acct ' + r.number + ')' : ''} [${TYPE_LABELS[r.type] || r.type}]`
+          ).join('\n');
+
+          log.push(`\nSending ${fileParts.length} document(s) + ${currentRows.length} accounts to Gemini…`);
+          setMatchLog([...log]);
+
+          const prompt = `You are reading Indian financial statements to extract FBAR account data.
+
+ACCOUNTS TO FIND (index: name [type]):
+${accountList}
+
+FILES PROVIDED (by index): ${fileParts.map((f, i) => `[${i}] ${f.name}`).join(', ')}
+
+Instructions:
+- Search all documents for each account listed above
+- Match by institution/fund/broker name — ignore minor spelling differences
+- Extract the EXACT institution name as printed in the document
+- Extract peak/maximum balance AND year-end (or latest) balance, both in INR
+- If an account appears in multiple files, use the most recent or most complete statement
+- If an account is not found in any document, set matched: false
+
+Return a JSON array — one entry per account, in the same order as the accounts list:
+[{
+  "account_index": <0-based index>,
+  "matched": <true|false>,
+  "institution_name": "<exact name from document>",
+  "account_number": "<****XXXX — last 4 of account/folio/DP ID, prefix ****>",
+  "file_index": <0-based file index, or null>,
+  "peak_balance_inr": <number or null>,
+  "year_end_balance_inr": <number or null>,
+  "statement_period": "<e.g. Apr 2024 – Mar 2025 or Dec 31, 2024>",
+  "note": "<anything relevant: joint holder, type of account, etc.>"
+}]
+
+Return ONLY the JSON array. No markdown fences, no explanation.`;
+
+          const parts = fileParts.map(f => ({ inlineData: { mimeType: f.mime, data: f.b64 } }));
+          parts.push({ text: prompt });
+
+          const resp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ parts }], generationConfig: { responseMimeType: 'application/json' } }) }
+          );
+          if (!resp.ok) {
+            const err = await resp.text();
+            throw new Error(`Gemini ${resp.status}: ${err.slice(0,300)}`);
+          }
+          const data = await resp.json();
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!text) throw new Error('Empty Gemini response');
+          const results = JSON.parse(text);
+
+          // ── Step 3: apply results ──────────────────────────────────────────
+          log.push(`\nResults (${results.filter(r=>r.matched).length} matched, ${results.filter(r=>!r.matched).length} not found):`);
+          for (const res of results) {
+            const row = currentRows[res.account_index];
+            if (!row) continue;
+            if (res.matched) {
+              const maxInr = res.peak_balance_inr || res.year_end_balance_inr || 0;
+              const yeInr  = res.year_end_balance_inr || res.peak_balance_inr || 0;
+              const fileName = fileParts[res.file_index]?.name || '?';
+              setRows(prev => prev.map(r => r.id === row.id ? {
+                ...r,
+                name:       res.institution_name || r.name,
+                number:     res.account_number   || r.number,
+                newMax:     Math.round(maxInr / fxRate),
+                newYearEnd: Math.round(yeInr  / fxRate),
+                matchFile:  fileName,
+                matchStatus: 'matched',
+              } : r));
+              log.push(`  ✓ [${res.account_index}] ${res.institution_name}  |  max ₹${maxInr.toLocaleString('en-IN')}  yr-end ₹${yeInr.toLocaleString('en-IN')}  ← ${fileName}`);
+              if (res.statement_period) log.push(`     period: ${res.statement_period}`);
+              if (res.note) log.push(`     note: ${res.note}`);
+            } else {
+              setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
+              log.push(`  ? [${res.account_index}] ${row.name} — not found in documents`);
+            }
+          }
+
+        } catch(e) {
+          if (e.message !== 'no files') log.push(`\n✗ Error: ${e.message}`);
         }
 
-        setMatchLog(log);
+        setMatchLog([...log]);
         setMatching(false);
         setMatchDone(true);
         runningRef.current = false;
