@@ -196,8 +196,8 @@
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
-    const STEPS = ['setup', 'scan', 'review', 'confirm', 'export'];
-    const STEP_LABELS = ['Setup', 'Scan', 'Review', 'Confirm', 'Export'];
+    const STEPS = ['setup', 'accounts', 'match', 'export'];
+    const STEP_LABELS = ['Setup', 'Accounts', 'Match', 'Export'];
 
     const TYPE_LABELS = { bank: 'Bank', brokerage: 'Brokerage', mf: 'MF', other: 'Other' };
 
@@ -1050,162 +1050,49 @@ Return JSON array only (no markdown, no explanation):
     }
 
     // ─── SetupScreen ──────────────────────────────────────────────────────────
-    function SetupScreen({ credentials, setCredentials, scanSources, setScanSources, localFolder, setLocalFolder,
-                           geminiKey, setGeminiKey, googleClientId, setGoogleClientId, gmailToken, setGmailToken, connectGmail,
-                           priorFbarFile, setPriorFbarFile, uploadedStatements, setUploadedStatements,
-                           priorManualAccounts, setPriorManualAccounts, taxYear, onNext,
-                           cacheDir, cacheDirName, pickCacheFolder }) {
+    function SetupScreen({ credentials, setCredentials, geminiKey, setGeminiKey,
+                           priorFbarFile, setPriorFbarFile, taxYear, onNext }) {
       const fileRef = useRef();
-      const stmtRef = useRef();
       const priorYear = taxYear - 1;
-
-      function handleFbarFile(e) {
-        const f = e.target.files[0];
-        if (f) setPriorFbarFile(f);
-      }
-
-      function handleStatements(files) {
-        setUploadedStatements(prev => {
-          const existing = prev.map(f => f.name);
-          const newFiles = Array.from(files).filter(f => !existing.includes(f.name));
-          return [...prev, ...newFiles];
-        });
-      }
-
-      function handleDrop(e) {
-        e.preventDefault();
-        handleStatements(e.dataTransfer.files);
-      }
-
-      function removeStatement(name) {
-        setUploadedStatements(prev => prev.filter(f => f.name !== name));
-      }
-
-      function handleToggle(key) {
-        setScanSources(prev => ({ ...prev, [key]: !prev[key] }));
-      }
 
       function handleCred(key, val) {
         setCredentials(prev => ({ ...prev, [key]: val }));
       }
 
-      const hasRealData = priorFbarFile || uploadedStatements.length > 0;
       const canProceed = credentials.pan.length >= 10 && credentials.dob && credentials.fullName.length >= 2;
 
       return (
         <div className="main">
           <div className="page-title">Set up {taxYear} FBAR</div>
-          <div className="page-sub">We'll use your {priorYear} FBAR as the baseline, then scan emails and documents to detect changes for {taxYear}.</div>
+          <div className="page-sub">Upload your {priorYear} FBAR to load prior accounts, then match {taxYear} statements to fill in current-year values.</div>
 
-          {!hasRealData && (
-            <div className="demo-banner">
-              No files uploaded — scan will use demo data. Upload your prior FBAR and/or statements below for real processing.
-            </div>
-          )}
+          <div className="section-label">Prior year FBAR ({priorYear})</div>
+          <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:8}}>
+            {priorFbarFile
+              ? <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ {priorFbarFile.name}
+                  <button style={{background:'none', border:'none', cursor:'pointer', color:'var(--text3)', fontSize:11, marginLeft:6}} onClick={() => { setPriorFbarFile(null); fileRef.current.value=''; }}>remove</button>
+                </span>
+              : <button className="btn-ghost" onClick={() => fileRef.current.click()}>Browse for prior FBAR PDF</button>
+            }
+            <input ref={fileRef} type="file" accept=".pdf,.xml" style={{display:'none'}}
+              onChange={e => { if (e.target.files[0]) setPriorFbarFile(e.target.files[0]); }}/>
+          </div>
+          {!priorFbarFile && <div style={{fontSize:12, color:'var(--text3)', marginBottom:8}}>No FBAR? You can add accounts manually in the next step.</div>}
+
+          <hr className="divider"/>
 
           <div className="section-label">Gemini API key</div>
           <div className="field-row">
-            <input type="password" placeholder="AIza…  (stored locally, never sent to any server other than Google)"
+            <input type="password" placeholder="AIza… (stored locally, used only to parse PDFs/XLS via Google AI)"
               value={geminiKey}
-              onChange={e => { setGeminiKey(e.target.value); localStorage.setItem('gemini_key', e.target.value); }}
-            />
-            <div className="field-hint">Required for PDF/XLS parsing. Get yours at aistudio.google.com/app/apikey — free tier is sufficient.</div>
-          </div>
-
-          <hr className="divider"/>
-
-          <div className="section-label">Prior year FBAR ({priorYear})</div>
-          <div style={{fontSize:12, color:'var(--text2)', marginBottom:10, lineHeight:1.6}}>
-            Upload your {priorYear} FinCEN 114 PDF — accounts are extracted automatically. Used as the baseline for matching {taxYear} statements.
-          </div>
-          <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:8}}>
-            {priorFbarFile
-              ? <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ {priorFbarFile.name} <button style={{background:'none', border:'none', cursor:'pointer', color:'var(--text3)', fontSize:11, marginLeft:4}} onClick={() => { setPriorFbarFile(null); fileRef.current.value=''; }}>remove</button></span>
-              : <button className="btn-ghost" onClick={() => fileRef.current.click()}>Browse for PDF / XML</button>
-            }
-            <input ref={fileRef} type="file" accept=".pdf,.xml" style={{display:'none'}} onChange={handleFbarFile}/>
-          </div>
-          {!priorFbarFile && (
-            <details style={{marginTop:4}}>
-              <summary style={{fontSize:12, color:'var(--text3)', cursor:'pointer', userSelect:'none'}}>No PDF? Enter accounts manually ›</summary>
-              <div style={{marginTop:10}}>
-                <PriorAccountsEditor accounts={priorManualAccounts} setAccounts={setPriorManualAccounts} priorYear={priorYear}/>
-              </div>
-            </details>
-          )}
-
-          <hr className="divider"/>
-
-          <div className="section-label">Statement files</div>
-          <div
-            className={`upload-zone${uploadedStatements.length > 0 ? ' has-file' : ''}`}
-            onDrop={handleDrop}
-            onDragOver={e => e.preventDefault()}
-          >
-            {uploadedStatements.length > 0 ? (
-              <>
-                <p style={{color:'var(--green-text)', marginBottom:8}}>✓ {uploadedStatements.length} file{uploadedStatements.length > 1 ? 's' : ''} ready</p>
-                {uploadedStatements.map(f => (
-                  <div key={f.name} style={{display:'flex', alignItems:'center', justifyContent:'space-between', fontSize:12, color:'var(--text2)', marginBottom:4, padding:'2px 4px'}}>
-                    <span>{f.name}</span>
-                    <button className="btn-ghost" style={{padding:'2px 8px', fontSize:11}} onClick={() => removeStatement(f.name)}>×</button>
-                  </div>
-                ))}
-                <div className="upload-btns" style={{marginTop:8}}>
-                  <button className="btn-ghost" onClick={() => stmtRef.current.click()}>Add more</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p>Drop statement PDFs / XLS files here</p>
-                <small>Zerodha, Groww, HDFC, ICICI, NSDL CAS, MF Central — any year-end statement</small>
-                <div className="upload-btns">
-                  <button className="btn-ghost" onClick={() => stmtRef.current.click()}>Browse files</button>
-                </div>
-              </>
-            )}
-            <input ref={stmtRef} type="file" accept=".pdf,.xls,.xlsx,.csv" multiple style={{display:'none'}}
-              onChange={e => handleStatements(e.target.files)}/>
-          </div>
-
-          <hr className="divider"/>
-
-          <div className="section-label">Gmail scan</div>
-          <div className="privacy-note">
-            Searches all of {taxYear} (plus Jan–Feb {taxYear+1}) using three layers: known institution senders (Zerodha, Groww, HDFC, ICICI, NSDL, MF Central, SBI, Kotak, Axis…), institutions in your prior FBAR, and broad subject-line patterns ("account statement", "portfolio statement", "demat statement", etc.). Only attachments are sent to Gemini — email body text is never read.
-          </div>
-
-          {gmailToken ? (
-            <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:16, padding:'10px 12px', background:'var(--green-bg)', border:'0.5px solid var(--green-border)', borderRadius:'var(--radius)', fontSize:13}}>
-              <span style={{color:'var(--green-text)'}}>✓ Gmail connected</span>
-              <button className="btn-ghost" style={{marginLeft:'auto', fontSize:11}} onClick={() => { setGmailToken(null); sessionStorage.removeItem('gmail_token'); setGoogleClientId(''); localStorage.removeItem('google_client_id'); }}>Disconnect</button>
-            </div>
-          ) : (
-            <GmailConnectSection
-              googleClientId={googleClientId} setGoogleClientId={setGoogleClientId}
-              setGmailToken={setGmailToken}
-              connectGmail={connectGmail}
-            />
-          )}
-
-          <div style={{display:'flex', alignItems:'center', gap:10, padding:'9px 12px', background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:'var(--radius)', marginBottom:4, fontSize:13}}>
-            <span style={{color:'var(--text2)', flex:1}}>
-              {cacheDirName
-                ? <><span style={{color:'var(--green-text)', fontWeight:500}}>✓ Cache folder:</span> <span style={{fontFamily:'monospace', fontSize:12}}>{cacheDirName}</span></>
-                : <span style={{color:'var(--text3)'}}>No cache folder — attachments re-downloaded every scan</span>}
-            </span>
-            <button className="btn-ghost" style={{fontSize:11, flexShrink:0}} onClick={pickCacheFolder}>
-              {cacheDirName ? 'Change' : 'Pick folder'}
-            </button>
-          </div>
-          <div style={{fontSize:11, color:'var(--text3)', marginBottom:16}}>
-            Downloaded attachments are saved here; re-scans only fetch new emails (delta).
+              onChange={e => { setGeminiKey(e.target.value); localStorage.setItem('gemini_key', e.target.value); }}/>
+            <div className="field-hint">Required to read statement files. Get a free key at aistudio.google.com/app/apikey</div>
           </div>
 
           <hr className="divider"/>
 
           <div className="section-label">Your credentials</div>
-          <div className="privacy-note">Used only to open password-protected statements. Never sent to any AI model.</div>
+          <div className="privacy-note">Used only to open password-protected PDFs. Never sent to any AI model.</div>
           <div className="field-group">
             <div className="field-row">
               <label>PAN</label>
@@ -1224,14 +1111,429 @@ Return JSON array only (no markdown, no explanation):
             <input type="text" placeholder="As it appears on statements"
               value={credentials.fullName}
               onChange={e => handleCred('fullName', e.target.value)}/>
-            <div className="field-hint">Used to match statements to your accounts</div>
           </div>
 
           <div className="actions">
             <button className="btn-primary" disabled={!canProceed} style={{opacity: canProceed ? 1 : 0.4}} onClick={onNext}>
-              Start scan →
+              Load accounts →
             </button>
-            {!canProceed && <span style={{fontSize:12, color:'var(--text3)'}}>Enter PAN, DOB, and name to continue</span>}
+            {!canProceed && <span style={{fontSize:12, color:'var(--text3)'}}>Enter PAN, DOB and name to continue</span>}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── AccountsScreen ───────────────────────────────────────────────────────
+    function AccountsScreen({ taxYear, priorFbarFile, geminiKey, setFinalAccounts, setFxRate, onNext, onBack }) {
+      const priorYear = taxYear - 1;
+      const [loading, setLoading] = useState(true);
+      const [error, setError]   = useState(null);
+      const [accts, setAccts]   = useState([]);
+      const [showAdd, setShowAdd] = useState(false);
+      const [newRow, setNewRow] = useState({ name:'', type:'bank', number:'', via:'' });
+
+      useEffect(() => {
+        async function load() {
+          // Fetch FX rate
+          let rate = 83.97;
+          try {
+            const r = await fetch(`${WORKER_URL}/api/fx?year=${taxYear}`);
+            if (r.ok) { const d = await r.json(); rate = d.rate; }
+          } catch(_) {}
+          setFxRate(rate);
+
+          if (priorFbarFile) {
+            try {
+              const extracted = await extractXFAAccounts(priorFbarFile);
+              if (extracted && extracted.length > 0) {
+                setAccts(extracted.map((a, i) => ({
+                  id: String(i + 1),
+                  name: a.institution_name,
+                  number: a.account_number || '????',
+                  type: a.account_type || 'bank',
+                  ownership: a.ownership || 'sole',
+                  joint_owner: a.joint_owner || null,
+                  currency: 'INR',
+                  include: true,
+                  source: 'fbar',
+                  via: null,
+                  priorMax: a.max_value_usd || null,
+                  priorYearEnd: a.year_end_value_usd || null,
+                  newMax: null, newYearEnd: null,
+                  matchFile: null, matchStatus: 'pending',
+                })));
+              } else {
+                setError('No accounts extracted from PDF — add accounts manually below.');
+              }
+            } catch(e) {
+              setError('Could not read FBAR: ' + e.message);
+            }
+          }
+          setLoading(false);
+        }
+        load();
+      }, []);
+
+      function addAccount() {
+        if (!newRow.name.trim()) return;
+        const last4 = newRow.number.replace(/\D/g,'').slice(-4);
+        setAccts(prev => [...prev, {
+          id: String(Date.now()),
+          name: newRow.name.trim(),
+          number: last4 ? `****${last4}` : '????',
+          type: newRow.type,
+          ownership: 'sole', joint_owner: null, currency: 'INR',
+          include: true, source: 'manual',
+          via: newRow.via.trim() || null,
+          priorMax: null, priorYearEnd: null,
+          newMax: null, newYearEnd: null,
+          matchFile: null, matchStatus: 'pending',
+        }]);
+        setNewRow({ name:'', type:'bank', number:'', via:'' });
+        setShowAdd(false);
+      }
+
+      function proceed() {
+        setFinalAccounts(accts);
+        onNext();
+      }
+
+      const included = accts.filter(a => a.include).length;
+
+      if (loading) return (
+        <div className="main" style={{display:'flex', alignItems:'center', gap:10, color:'var(--text2)', fontSize:14}}>
+          <span className="spin-icon">↻</span> Reading {priorFbarFile ? priorFbarFile.name : 'FBAR'}…
+        </div>
+      );
+
+      return (
+        <div className="review-main">
+          <button className="nav-back" onClick={onBack}>← Setup</button>
+          <div className="top-row">
+            <div>
+              <div className="page-title">{priorYear} accounts — {taxYear} FBAR baseline</div>
+              <div className="page-sub">Toggle off accounts you won't report in {taxYear}, delete closed accounts, or add new ones.</div>
+            </div>
+            <div className="stat-row">
+              <div className="stat"><div className="stat-val">{included}</div><div className="stat-label">included</div></div>
+              <div className="stat"><div className="stat-val" style={{color:'var(--text3)'}}>{accts.length - included}</div><div className="stat-label">excluded</div></div>
+            </div>
+          </div>
+
+          {error && <div style={{padding:'10px 14px', background:'var(--amber-bg)', border:'0.5px solid var(--amber-border)', borderRadius:'var(--radius)', fontSize:13, color:'var(--amber-text)', marginBottom:16}}>{error}</div>}
+
+          <div className="tbl-outer">
+            <table>
+              <thead>
+                <tr>
+                  <th>Institution</th>
+                  <th>Account #</th>
+                  <th>Type</th>
+                  <th>Ownership</th>
+                  <th style={{textAlign:'right'}}>Prior max (USD)</th>
+                  <th style={{textAlign:'right'}}>Prior yr-end</th>
+                  <th style={{textAlign:'center'}}>Include in {taxYear}</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {accts.map(a => (
+                  <tr key={a.id} style={{opacity: a.include ? 1 : 0.45}}>
+                    <td>
+                      <div style={{fontWeight:500, fontSize:13}}>{a.name}</div>
+                      {a.via && <div style={{fontSize:11, color:'var(--text3)'}}>via {a.via}</div>}
+                    </td>
+                    <td className="mono">{a.number}</td>
+                    <td>{TYPE_LABELS[a.type] || a.type}</td>
+                    <td style={{fontSize:11, color:'var(--text3)'}}>
+                      {a.ownership === 'joint'
+                        ? <span style={{color:'var(--amber-text)'}}>joint{a.joint_owner ? ` · ${a.joint_owner.slice(0,25)}` : ''}</span>
+                        : a.ownership === 'sigauth' ? 'sig auth' : 'sole'}
+                    </td>
+                    <td style={{textAlign:'right', color:'var(--text2)'}}>{fmtUSD(a.priorMax)}</td>
+                    <td style={{textAlign:'right', color:'var(--text2)'}}>{fmtUSD(a.priorYearEnd)}</td>
+                    <td style={{textAlign:'center'}}>
+                      <div className={`toggle${a.include ? ' on' : ''}`} style={{margin:'0 auto'}}
+                        onClick={() => setAccts(prev => prev.map(x => x.id === a.id ? {...x, include: !x.include} : x))}>
+                        <div className="toggle-thumb"/>
+                      </div>
+                    </td>
+                    <td>
+                      <button style={{background:'none', border:'none', cursor:'pointer', color:'var(--text3)', fontSize:14, padding:'2px 6px'}}
+                        onClick={() => setAccts(prev => prev.filter(x => x.id !== a.id))}
+                        title="Delete account">×</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {showAdd ? (
+            <div style={{marginTop:16, padding:'14px 16px', background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:'var(--radius)'}}>
+              <div style={{fontSize:13, fontWeight:500, marginBottom:10}}>Add account</div>
+              <div style={{display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:10, marginBottom:10}}>
+                <div>
+                  <label style={{fontSize:11, color:'var(--text3)', display:'block', marginBottom:4}}>Institution name</label>
+                  <input type="text" placeholder="e.g. HDFC Bank, Zerodha, ABSLMF"
+                    value={newRow.name} onChange={e => setNewRow(p => ({...p, name: e.target.value}))}
+                    style={{width:'100%', padding:'7px 10px', border:'0.5px solid var(--border2)', borderRadius:'var(--radius)', fontSize:13}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:11, color:'var(--text3)', display:'block', marginBottom:4}}>Type</label>
+                  <select value={newRow.type} onChange={e => setNewRow(p => ({...p, type: e.target.value}))}
+                    style={{width:'100%', padding:'7px 10px', border:'0.5px solid var(--border2)', borderRadius:'var(--radius)', fontSize:13, background:'var(--bg)'}}>
+                    <option value="bank">Bank</option>
+                    <option value="brokerage">Brokerage</option>
+                    <option value="mf">Mutual Fund</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{fontSize:11, color:'var(--text3)', display:'block', marginBottom:4}}>Acct # (last 4)</label>
+                  <input type="text" placeholder="1234" maxLength={20}
+                    value={newRow.number} onChange={e => setNewRow(p => ({...p, number: e.target.value}))}
+                    style={{width:'100%', padding:'7px 10px', border:'0.5px solid var(--border2)', borderRadius:'var(--radius)', fontSize:13}}/>
+                </div>
+              </div>
+              <div style={{marginBottom:10}}>
+                <label style={{fontSize:11, color:'var(--text3)', display:'block', marginBottom:4}}>Held via intermediary (optional) — e.g. Itus Capital, CAMS, Zerodha</label>
+                <input type="text" placeholder="Leave blank if direct account"
+                  value={newRow.via} onChange={e => setNewRow(p => ({...p, via: e.target.value}))}
+                  style={{width:'100%', padding:'7px 10px', border:'0.5px solid var(--border2)', borderRadius:'var(--radius)', fontSize:13}}/>
+              </div>
+              <div style={{display:'flex', gap:8}}>
+                <button className="btn-primary" style={{fontSize:12}} onClick={addAccount}>Add</button>
+                <button className="btn-ghost" style={{fontSize:12}} onClick={() => setShowAdd(false)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button className="btn-ghost" style={{marginTop:14, fontSize:13}} onClick={() => setShowAdd(true)}>+ Add account</button>
+          )}
+
+          <div className="actions">
+            <button className="btn-primary" disabled={included === 0} style={{opacity: included ? 1 : 0.4}} onClick={proceed}>
+              Match statements → ({included} account{included !== 1 ? 's' : ''})
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── MatchScreen ──────────────────────────────────────────────────────────
+    function MatchScreen({ taxYear, accounts, setAccounts, geminiKey, fxRate, onNext, onBack }) {
+      const priorYear = taxYear - 1;
+      const [stmtFiles, setStmtFiles] = useState([]);  // File objects
+      const [matching, setMatching]   = useState(false);
+      const [matchLog, setMatchLog]   = useState([]);
+      const [rows, setRows]           = useState(() =>
+        accounts.filter(a => a.include).map(a => ({...a, matchStatus: 'pending', matchFile: null}))
+      );
+      const stmtRef = useRef();
+
+      // Fuzzy: does filename likely correspond to this account?
+      function filenameMatch(accountName, via, filename) {
+        const fn = filename.toLowerCase();
+        const words = (accountName + ' ' + (via || '')).toLowerCase()
+          .split(/[\s\-_.,/]+/).filter(w => w.length > 3);
+        return words.some(w => fn.includes(w));
+      }
+
+      async function runMatch(files) {
+        if (!geminiKey || files.length === 0) return;
+        setMatching(true);
+        const log = [];
+
+        for (const row of rows) {
+          // Find candidate files by fuzzy name match
+          const candidates = files.filter(f => filenameMatch(row.name, row.via, f.name));
+          // Also check all files if no name-match (handles CPA summaries with generic names)
+          const toTry = candidates.length > 0 ? candidates : files;
+          let matched = false;
+
+          for (const file of toTry) {
+            try {
+              const parsed = await parseStatement(file, geminiKey);
+              const hit = parsed.find(p =>
+                normInst(p.institution_name) === normInst(row.name) ||
+                (row.via && normInst(p.institution_name) === normInst(row.via))
+              );
+              if (hit) {
+                const maxInr  = hit.peak_balance_inr || hit.year_end_balance_inr || 0;
+                const yeInr   = hit.year_end_balance_inr || 0;
+                setRows(prev => prev.map(r => r.id === row.id ? {
+                  ...r,
+                  newMax: Math.round(maxInr / fxRate),
+                  newYearEnd: Math.round(yeInr / fxRate),
+                  matchFile: file.name,
+                  matchStatus: 'matched',
+                } : r));
+                log.push(`✓ ${row.name} ← ${file.name}`);
+                matched = true;
+                break;
+              }
+            } catch(e) {
+              log.push(`✗ ${file.name}: ${e.message.slice(0,60)}`);
+            }
+          }
+          if (!matched) {
+            setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
+            log.push(`? ${row.name} — no match found, enter manually`);
+          }
+        }
+
+        setMatchLog(log);
+        setMatching(false);
+      }
+
+      function handleFiles(fileList) {
+        const files = Array.from(fileList).filter(f => /\.(pdf|xls|xlsx|csv)$/i.test(f.name));
+        setStmtFiles(prev => {
+          const names = new Set(prev.map(f => f.name));
+          return [...prev, ...files.filter(f => !names.has(f.name))];
+        });
+        runMatch([...stmtFiles, ...files.filter(f => !/x/.test(''))]);  // will re-run below via effect
+      }
+
+      function handleDrop(e) { e.preventDefault(); handleFilesAndRun(Array.from(e.dataTransfer.files)); }
+
+      async function handleFilesAndRun(newFiles) {
+        const valid = newFiles.filter(f => /\.(pdf|xls|xlsx|csv)$/i.test(f.name));
+        if (!valid.length) return;
+        const merged = [...stmtFiles, ...valid.filter(f => !stmtFiles.find(x => x.name === f.name))];
+        setStmtFiles(merged);
+        await runMatch(merged);
+      }
+
+      function updateRow(id, field, val) {
+        const num = parseFloat(val.replace(/[^0-9.]/g,''));
+        setRows(prev => prev.map(r => r.id === id
+          ? {...r, [field]: isNaN(num) ? null : num, matchStatus: r.matchStatus === 'pending' ? 'manual' : r.matchStatus}
+          : r));
+      }
+
+      function proceed() {
+        setAccounts(rows);
+        onNext();
+      }
+
+      const matched = rows.filter(r => r.matchStatus === 'matched').length;
+      const manual  = rows.filter(r => r.matchStatus === 'manual').length;
+      const pending = rows.filter(r => r.matchStatus === 'pending').length;
+
+      return (
+        <div className="review-main">
+          <button className="nav-back" onClick={onBack}>← Accounts</button>
+          <div className="top-row">
+            <div>
+              <div className="page-title">Match {taxYear} statements</div>
+              <div className="page-sub">Drop statement files — PDF, XLS, or CSV. Gemini reads each file and matches values to accounts.</div>
+            </div>
+            <div className="stat-row">
+              {matched > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--green-text)'}}>{matched}</div><div className="stat-label">matched</div></div>}
+              {manual > 0  && <div className="stat"><div className="stat-val" style={{color:'var(--amber-text)'}}>{manual}</div><div className="stat-label">manual</div></div>}
+              {pending > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--text3)'}}>{pending}</div><div className="stat-label">pending</div></div>}
+            </div>
+          </div>
+
+          <div
+            style={{border:`0.5px dashed var(--border2)`, borderRadius:'var(--radius)', padding:'16px 20px',
+              background:'var(--bg2)', marginBottom:16, cursor:'pointer'}}
+            onDrop={handleDrop} onDragOver={e => e.preventDefault()}
+            onClick={() => stmtRef.current.click()}
+          >
+            {stmtFiles.length > 0 ? (
+              <div>
+                <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ {stmtFiles.length} file{stmtFiles.length !== 1 ? 's' : ''} loaded</span>
+                <span style={{fontSize:12, color:'var(--text3)', marginLeft:10}}>{stmtFiles.map(f=>f.name).join(', ').slice(0,80)}{stmtFiles.length > 3 ? '…' : ''}</span>
+                {matching && <span style={{fontSize:12, color:'var(--blue-text)', marginLeft:10}}>matching…</span>}
+              </div>
+            ) : (
+              <div style={{textAlign:'center'}}>
+                <div style={{fontSize:13, color:'var(--text2)', marginBottom:4}}>Drop statement files here, or click to browse</div>
+                <div style={{fontSize:12, color:'var(--text3)'}}>PDF · XLS · XLSX · CSV — bank statements, broker reports, CAMS, CPA summaries</div>
+              </div>
+            )}
+          </div>
+          <input ref={stmtRef} type="file" accept=".pdf,.xls,.xlsx,.csv" multiple style={{display:'none'}}
+            onChange={e => handleFilesAndRun(Array.from(e.target.files))}/>
+
+          {!geminiKey && (
+            <div style={{padding:'10px 14px', background:'var(--amber-bg)', border:'0.5px solid var(--amber-border)', borderRadius:'var(--radius)', fontSize:12, color:'var(--amber-text)', marginBottom:14}}>
+              Gemini API key not set — enter it on the Setup screen to enable automatic matching. You can still enter values manually below.
+            </div>
+          )}
+
+          <div className="tbl-outer">
+            <table>
+              <thead>
+                <tr>
+                  <th rowSpan={2}>Institution</th>
+                  <th rowSpan={2}>Acct #</th>
+                  <th rowSpan={2}>Type</th>
+                  <th colSpan={2} className="prior">{priorYear} prior</th>
+                  <th colSpan={2} className="new-grp">{taxYear} current</th>
+                  <th rowSpan={2}>Source</th>
+                </tr>
+                <tr>
+                  <th className="sub-prior">Max</th>
+                  <th className="sub-prior-r">Yr-end</th>
+                  <th className="sub-new">Max</th>
+                  <th className="sub-new-r">Yr-end</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={r.id} className={r.matchStatus === 'matched' ? '' : r.matchStatus === 'manual' ? 'row-review' : ''}>
+                    <td>
+                      <div style={{fontWeight:500, fontSize:13}}>{r.name}</div>
+                      {r.via && <div style={{fontSize:11, color:'var(--text3)'}}>via {r.via}</div>}
+                    </td>
+                    <td className="mono">{r.number}</td>
+                    <td style={{fontSize:12}}>{TYPE_LABELS[r.type] || r.type}</td>
+                    <td className="muted pb">{fmtUSD(r.priorMax)}</td>
+                    <td className="muted">{fmtUSD(r.priorYearEnd)}</td>
+                    <td className="r nb">
+                      {r.matchStatus === 'matched'
+                        ? <span style={{color:'var(--green-text)'}}>{fmtUSD(r.newMax)}</span>
+                        : <input className="edit-cell"
+                            value={r.newMax != null ? String(Math.round(r.newMax)) : ''}
+                            placeholder="—"
+                            onChange={e => updateRow(r.id, 'newMax', e.target.value)}/>
+                      }
+                    </td>
+                    <td className="r">
+                      {r.matchStatus === 'matched'
+                        ? <span style={{color:'var(--green-text)'}}>{fmtUSD(r.newYearEnd)}</span>
+                        : <input className="edit-cell"
+                            value={r.newYearEnd != null ? String(Math.round(r.newYearEnd)) : ''}
+                            placeholder="—"
+                            onChange={e => updateRow(r.id, 'newYearEnd', e.target.value)}/>
+                      }
+                    </td>
+                    <td>
+                      {r.matchFile
+                        ? <span className="chip" title={r.matchFile}>{r.matchFile.slice(0,25)}{r.matchFile.length > 25 ? '…' : ''}</span>
+                        : r.matchStatus === 'manual'
+                        ? <span style={{fontSize:11, color:'var(--amber-text)'}}>manual entry</span>
+                        : <span style={{color:'var(--text3)', fontSize:11}}>—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {matchLog.length > 0 && (
+            <details style={{marginTop:12}}>
+              <summary style={{fontSize:11, color:'var(--text3)', cursor:'pointer'}}>Matching log ({matchLog.length} entries)</summary>
+              <pre style={{fontSize:11, color:'var(--text2)', marginTop:6, lineHeight:1.6, whiteSpace:'pre-wrap'}}>{matchLog.join('\n')}</pre>
+            </details>
+          )}
+
+          <div className="actions">
+            <button className="btn-primary" onClick={proceed}>Proceed to export →</button>
+            <span className="fx-note">INR → USD · Dec 31 ₹{fxRate.toFixed(2)}/$1</span>
           </div>
         </div>
       );
@@ -1656,478 +1958,12 @@ Return JSON array only (no markdown, no explanation):
       );
     }
 
-    // ─── ReviewScreen ─────────────────────────────────────────────────────────
-    function ReviewScreen({ accounts, setAccounts, taxYear, fxRate, onNext, onBack }) {
-      const priorYear = taxYear - 1;
-      const counts = {
-        matched: accounts.filter(a => a.status === 'matched').length,
-        review: accounts.filter(a => a.status === 'review').length,
-        new: accounts.filter(a => a.status === 'new').length,
-        missing: accounts.filter(a => a.status === 'missing').length,
-        closed: accounts.filter(a => a.status === 'closed').length,
-        confirmed: accounts.filter(a => a.status === 'confirmed').length,
-      };
-
-      function updateAccount(id, field, raw) {
-        const val = raw === '' ? null : parseFloat(raw.replace(/[^0-9.]/g, ''));
-        setAccounts(prev => prev.map(a => a.id === id ? { ...a, [field]: isNaN(val) ? null : val } : a));
-      }
-
-      function approveAllMatched() {
-        setAccounts(prev => prev.map(a => a.status === 'matched' ? { ...a, status: 'confirmed' } : a));
-      }
-
-      function rowClass(a) {
-        if (a.status === 'review') return 'row-review';
-        if (a.status === 'new') return 'row-new';
-        if (a.status === 'missing') return 'row-missing';
-        if (a.status === 'closed') return 'row-closed';
-        return '';
-      }
-
-      function statusPill(s) {
-        const map = { matched:'pill-green', review:'pill-amber', new:'pill-blue', missing:'pill-red', closed:'pill-gray', confirmed:'pill-green' };
-        const label = s === 'confirmed' ? 'matched' : s;
-        return <span className={`pill ${map[s] || 'pill-gray'}`}>{label}</span>;
-      }
-
-      function EditCell({ accountId, field, value }) {
-        const [local, setLocal] = useState(value != null ? String(Math.round(value)) : '');
-        return (
-          <input
-            className="edit-cell"
-            value={local}
-            placeholder="—"
-            onChange={e => setLocal(e.target.value)}
-            onBlur={() => updateAccount(accountId, field, local)}
-          />
-        );
-      }
-
-      return (
-        <div className="review-main">
-          <button className="nav-back" onClick={onBack}>← Re-scan</button>
-          <div className="top-row">
-            <div>
-              <div className="page-title">Review accounts</div>
-              <div className="page-sub">{accounts.length} accounts · edit any cell · only amber, blue, red need action</div>
-            </div>
-            <div className="stat-row">
-              <div className="stat"><div className="stat-val" style={{color:'#3B6D11'}}>{counts.matched + counts.confirmed}</div><div className="stat-label">matched</div></div>
-              {counts.review > 0 && <div className="stat"><div className="stat-val" style={{color:'#854F0B'}}>{counts.review}</div><div className="stat-label">review</div></div>}
-              {counts.new > 0 && <div className="stat"><div className="stat-val" style={{color:'#185FA5'}}>{counts.new}</div><div className="stat-label">new</div></div>}
-              {counts.missing > 0 && <div className="stat"><div className="stat-val" style={{color:'#A32D2D'}}>{counts.missing}</div><div className="stat-label">missing</div></div>}
-              {counts.closed > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--text3)'}}>{counts.closed}</div><div className="stat-label">closed</div></div>}
-            </div>
-          </div>
-
-          <div className="tbl-outer">
-            <table>
-              <thead>
-                <tr>
-                  <th rowSpan={2}>Account name</th>
-                  <th rowSpan={2}>Number</th>
-                  <th rowSpan={2}>Type</th>
-                  <th rowSpan={2}>Ownership</th>
-                  <th rowSpan={2}>Ccy</th>
-                  <th colSpan={2} className="prior">{priorYear} prior</th>
-                  <th colSpan={2} className="new-grp">{taxYear} new</th>
-                  <th rowSpan={2}>Status</th>
-                  <th rowSpan={2}>Source</th>
-                </tr>
-                <tr>
-                  <th className="sub-prior">Max value</th>
-                  <th className="sub-prior-r">Year-end</th>
-                  <th className="sub-new">Max value</th>
-                  <th className="sub-new-r">Year-end</th>
-                </tr>
-              </thead>
-              <tbody>
-                {accounts.map(a => (
-                  <tr key={a.id} className={rowClass(a)}>
-                    <td>{a.name}</td>
-                    <td className="mono">{a.number}</td>
-                    <td>
-                      {a.status === 'review' && a.reviewReason === 'type_change' ? (
-                        <div className="type-change">
-                          <span className="type-old">{TYPE_LABELS[a.priorType]}</span>
-                          <span style={{color:'var(--text3)', fontSize:10}}>→</span>
-                          <span>{TYPE_LABELS[a.type]}</span>
-                        </div>
-                      ) : TYPE_LABELS[a.type] || a.type}
-                    </td>
-                    <td style={{fontSize:11}}>
-                      {a.ownership === 'joint'
-                        ? <span title={a.joint_owner || ''} style={{color:'var(--amber-text)'}}>
-                            joint{a.joint_owner ? ` · ${a.joint_owner.length > 22 ? a.joint_owner.slice(0,22)+'…' : a.joint_owner}` : ''}
-                          </span>
-                        : a.ownership === 'sigauth'
-                        ? <span style={{color:'var(--text3)'}}>sig auth</span>
-                        : a.ownership === 'sole'
-                        ? <span style={{color:'var(--text3)'}}>sole</span>
-                        : <span style={{color:'var(--text3)'}}>—</span>}
-                    </td>
-                    <td style={{color:'var(--text3)', fontSize:11}}>{a.currency}</td>
-                    <td className="muted pb">{fmtUSD(a.priorMax)}</td>
-                    <td className="muted">{fmtUSD(a.priorYearEnd)}</td>
-                    <td className="r nb">
-                      {a.status === 'matched' || a.status === 'confirmed' ? fmtUSD(a.newMax) :
-                        <EditCell key={a.id+'max'} accountId={a.id} field="newMax" value={a.newMax}/>}
-                    </td>
-                    <td className="r">
-                      {a.status === 'matched' || a.status === 'confirmed' ? fmtUSD(a.newYearEnd) :
-                        <EditCell key={a.id+'ye'} accountId={a.id} field="newYearEnd" value={a.newYearEnd}/>}
-                    </td>
-                    <td>{statusPill(a.status)}</td>
-                    <td>{a.source ? <span className="chip">{a.source}</span> : <span style={{color:'var(--text3)'}}>—</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="actions">
-            <button className="btn-primary" onClick={onNext}>Proceed to confirm →</button>
-            <button className="btn-ghost" onClick={approveAllMatched}>Approve all matched</button>
-            <button className="btn-ghost" onClick={() => {
-              const rows = accounts.map(a => ({
-                institution: a.name, account_number: a.number, type: a.type,
-                ownership: a.ownership || '', joint_owner: a.joint_owner || '',
-                currency: a.currency || 'INR', fxRate,
-                prior_max_usd: a.priorMax, prior_year_end_usd: a.priorYearEnd,
-                new_max_usd: a.newMax, new_year_end_usd: a.newYearEnd,
-                status: a.status, source: a.source || ''
-              }));
-              const blob = new Blob([JSON.stringify({ taxYear, fxRate, accounts: rows }, null, 2)], { type: 'application/json' });
-              const url = URL.createObjectURL(blob);
-              const a2 = document.createElement('a');
-              a2.href = url; a2.download = `FBAR_${taxYear}_review.json`; a2.click();
-              URL.revokeObjectURL(url);
-            }}>Download JSON</button>
-            <button className="btn-secondary" onClick={onBack} style={{marginLeft:'auto'}}>← Re-scan</button>
-            <span className="fx-note">INR → USD · Dec 31 ₹{fxRate.toFixed(2)}/$1</span>
-          </div>
-        </div>
-      );
-    }
-
-    // ─── ConfirmScreen ────────────────────────────────────────────────────────
-    function ConfirmScreen({ accounts, setAccounts, taxYear, fxRate, onNext, onBack }) {
-      const pending = accounts.filter(a => ['review', 'new', 'missing'].includes(a.status));
-      const [messages, setMessages] = useState([]);
-      const [qIdx, setQIdx] = useState(0);
-      const [inputVal, setInputVal] = useState('');
-      const [waitingManual, setWaitingManual] = useState(null); // { accountId, field, label }
-      const [manualVal, setManualVal] = useState('');
-      const [complete, setComplete] = useState(false);
-      const scrollRef = useRef();
-
-      function addMsg(msg) {
-        setMessages(prev => {
-          const next = [...prev, msg];
-          return next;
-        });
-      }
-
-      function scrollBottom() {
-        setTimeout(() => {
-          if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }, 50);
-      }
-
-      function makeQuestion(account) {
-        if (account.status === 'review' && account.reviewReason === 'type_change') {
-          return {
-            id: `q_${account.id}`,
-            from: 'agent',
-            text: `**${account.name}** — account type changed from ${TYPE_LABELS[account.priorType]} to ${TYPE_LABELS[account.type]} in the ${taxYear} statement. Is this correct?`,
-            accountId: account.id,
-            actions: [
-              { label: `Yes, it's ${TYPE_LABELS[account.type].toLowerCase()} now`, value: 'confirm_type' },
-              { label: `Keep as ${TYPE_LABELS[account.priorType]}`, value: 'revert_type' },
-            ]
-          };
-        }
-        if (account.status === 'missing') {
-          return {
-            id: `q_${account.id}`,
-            from: 'agent',
-            text: `**${account.name}** — no ${taxYear} statement found. Prior year value was ${fmtUSD(account.priorYearEnd)}.`,
-            accountId: account.id,
-            actions: [
-              { label: 'Use prior year values', value: 'use_prior' },
-              { label: "I'll enter manually", value: 'manual_entry' },
-              { label: 'Account was closed', value: 'closed' },
-            ]
-          };
-        }
-        if (account.status === 'new') {
-          return {
-            id: `q_${account.id}`,
-            from: 'agent',
-            text: `**${account.name}** is new. Year-end value from statement: ${fmtUSD(account.newYearEnd)}. What was the peak balance during ${taxYear}?`,
-            accountId: account.id,
-            actions: [
-              { label: `Same as year-end (${fmtUSD(account.newYearEnd)})`, value: 'same_as_yearend' },
-              { label: "I'll enter it", value: 'manual_max' },
-            ]
-          };
-        }
-      }
-
-      function showCompletion() {
-        const active = accounts.filter(a => a.status !== 'closed' && a.newMax != null);
-        const totalMax = active.reduce((s, a) => s + (a.newMax || 0), 0);
-        const flagged = accounts.filter(a => a.notes).length;
-        addMsg({
-          id: 'complete',
-          from: 'agent',
-          text: `All ${accounts.length} accounts resolved. Total max value: **${fmtUSD(totalMax)}**\nExchange rate: ₹${fxRate.toFixed(2)}/$1 (Dec 31, ${taxYear})${flagged > 0 ? ` · ${flagged} account${flagged > 1 ? 's' : ''} flagged for review` : ''}.`,
-          actions: [
-            { label: 'Generate FBAR PDF →', value: 'export', primary: true },
-            { label: 'Back to table', value: 'back' },
-          ],
-          isFinal: true
-        });
-        setComplete(true);
-        scrollBottom();
-      }
-
-      useEffect(() => {
-        const matched = accounts.filter(a => a.status === 'matched' || a.status === 'confirmed');
-        const initMsg = {
-          id: 'init',
-          from: 'agent',
-          text: `${matched.length} accounts matched cleanly — no action needed on those. I have ${pending.length} item${pending.length !== 1 ? 's' : ''} that need your input.`,
-          card: accounts.map(a => ({ name: a.name, number: a.number, status: a.status === 'confirmed' ? 'matched' : a.status }))
-        };
-        addMsg(initMsg);
-
-        if (pending.length === 0) {
-          setTimeout(() => showCompletion(), 400);
-        } else {
-          setTimeout(() => {
-            addMsg(makeQuestion(pending[0]));
-            scrollBottom();
-          }, 500);
-        }
-      }, []);
-
-      useEffect(scrollBottom, [messages]);
-
-      function processAction(msgId, action, accountId) {
-        const account = accounts.find(a => a.id === accountId);
-        if (!account) return;
-
-        // Dismiss buttons on this message
-        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, actions: null } : m));
-
-        // User message
-        addMsg({ id: `u_${Date.now()}`, from: 'user', text: action.label });
-
-        let agentText = '';
-        let memoryNote = null;
-        let needManual = null;
-
-        if (action.value === 'confirm_type') {
-          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, status: 'confirmed' } : a));
-          agentText = `Updated to ${TYPE_LABELS[account.type]}.`;
-          memoryNote = `${account.name} reclassified ${TYPE_LABELS[account.priorType]} → ${TYPE_LABELS[account.type]} from ${taxYear}.`;
-        } else if (action.value === 'revert_type') {
-          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, type: a.priorType, status: 'confirmed' } : a));
-          agentText = `Kept as ${TYPE_LABELS[account.priorType]}.`;
-        } else if (action.value === 'use_prior') {
-          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, newMax: a.priorMax, newYearEnd: a.priorYearEnd, status: 'confirmed', notes: 'Prior year values used — statement not yet received.' } : a));
-          agentText = `Done — using prior year values for ${account.name}, flagged for review before filing.`;
-          memoryNote = `${account.name} statements arrive late — use prior year values until updated.`;
-        } else if (action.value === 'closed') {
-          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, status: 'closed' } : a));
-          agentText = `${account.name} marked as closed for ${taxYear}.`;
-        } else if (action.value === 'same_as_yearend') {
-          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, newMax: a.newYearEnd, status: 'confirmed' } : a));
-          agentText = `Peak balance set to ${fmtUSD(account.newYearEnd)} (same as year-end).`;
-        } else if (action.value === 'manual_entry') {
-          needManual = { accountId, field: 'yearend', label: `Enter year-end value for ${account.name} ($)` };
-          agentText = null;
-        } else if (action.value === 'manual_max') {
-          needManual = { accountId, field: 'max', label: `Enter peak balance for ${account.name} in ${taxYear} ($)` };
-          agentText = null;
-        } else if (action.value === 'export') {
-          onNext();
-          return;
-        } else if (action.value === 'back') {
-          // go back to review — handled by parent
-          onNext('review');
-          return;
-        }
-
-        if (needManual) {
-          setWaitingManual(needManual);
-          scrollBottom();
-          return;
-        }
-
-        const nextIdx = qIdx + 1;
-        setQIdx(nextIdx);
-
-        setTimeout(() => {
-          const agentMsg = { id: `a_${Date.now()}`, from: 'agent', text: agentText, memoryNote };
-          addMsg(agentMsg);
-
-          if (!complete && nextIdx < pending.length) {
-            setTimeout(() => {
-              addMsg(makeQuestion(pending[nextIdx]));
-              scrollBottom();
-            }, 400);
-          } else if (!complete) {
-            setTimeout(() => showCompletion(), 400);
-          }
-          scrollBottom();
-        }, 300);
-      }
-
-      function submitManual() {
-        if (!waitingManual || !manualVal) return;
-        const { accountId, field } = waitingManual;
-        const account = accounts.find(a => a.id === accountId);
-        const val = parseFloat(manualVal.replace(/[^0-9.]/g, ''));
-
-        let agentText = '';
-        if (field === 'max') {
-          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, newMax: val, status: 'confirmed' } : a));
-          agentText = `Peak balance for ${account.name} set to ${fmtUSD(val)}.`;
-        } else {
-          setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, newYearEnd: val, newMax: val, status: 'confirmed' } : a));
-          agentText = `${account.name} values set to ${fmtUSD(val)}.`;
-        }
-
-        setWaitingManual(null);
-        setManualVal('');
-        addMsg({ id: `u_${Date.now()}`, from: 'user', text: `$${val.toLocaleString()}` });
-
-        const nextIdx = qIdx + 1;
-        setQIdx(nextIdx);
-
-        setTimeout(() => {
-          addMsg({ id: `a_${Date.now()}`, from: 'agent', text: agentText });
-          if (nextIdx < pending.length) {
-            setTimeout(() => {
-              addMsg(makeQuestion(pending[nextIdx]));
-              scrollBottom();
-            }, 400);
-          } else {
-            setTimeout(() => showCompletion(), 400);
-          }
-          scrollBottom();
-        }, 300);
-      }
-
-      function sendFreeText() {
-        if (!inputVal.trim()) return;
-        addMsg({ id: `u_${Date.now()}`, from: 'user', text: inputVal.trim() });
-        setInputVal('');
-        scrollBottom();
-      }
-
-      return (
-        <div className="chat-area">
-          <div style={{padding:'8px 16px 0', borderBottom:'0.5px solid var(--border)'}}>
-            <button className="nav-back" onClick={onBack}>← Review table</button>
-          </div>
-          <div className="chat-scroll" ref={scrollRef}>
-            {messages.map(msg => (
-              <div key={msg.id} className={msg.from === 'agent' ? 'msg-agent' : 'msg-user'}>
-                <div className={msg.from === 'agent' ? 'agent-label' : 'user-label'}>
-                  {msg.from === 'agent' ? 'Tax agent' : 'You'}
-                </div>
-                <div className={msg.from === 'agent' ? 'bubble-agent' : 'bubble-user'}>
-                  {msg.text && <div>{renderText(msg.text)}</div>}
-                  {msg.card && (
-                    <div className="summary-card">
-                      {(() => {
-                        const matched = msg.card.filter(r => r.status === 'matched' || r.status === 'confirmed');
-                        const nonMatched = msg.card.filter(r => !['matched','confirmed'].includes(r.status));
-                        const pillMap = { matched:'pill-green', review:'pill-amber', new:'pill-blue', missing:'pill-red', closed:'pill-gray' };
-                        return (
-                          <>
-                            {matched.length > 0 && (
-                              <div className="summary-row">
-                                <span className="s-muted">{matched.map(r => r.name).join(', ')}</span>
-                                <span className="pill pill-green">matched ×{matched.length}</span>
-                              </div>
-                            )}
-                            {nonMatched.map(r => (
-                              <div key={r.name} className="summary-row">
-                                <span className="s-name">{r.name} {r.number}</span>
-                                <span className={`pill ${pillMap[r.status] || 'pill-gray'}`}>{r.status}</span>
-                              </div>
-                            ))}
-                          </>
-                        );
-                      })()}
-                    </div>
-                  )}
-                  {msg.memoryNote && (
-                    <div className="memory-note">Remembered: {msg.memoryNote}</div>
-                  )}
-                  {msg.actions && (
-                    <div className="action-row">
-                      {msg.actions.map(action => (
-                        <button
-                          key={action.value}
-                          className={`btn-action${action.primary ? ' primary' : ''}`}
-                          onClick={() => msg.isFinal ? processAction(msg.id, action, null) : processAction(msg.id, action, msg.accountId)}
-                        >
-                          {action.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-
-            {waitingManual && (
-              <div className="msg-agent">
-                <div className="agent-label">Tax agent</div>
-                <div className="bubble-agent">
-                  {waitingManual.label}
-                  <div className="manual-input-row">
-                    <input
-                      type="number"
-                      placeholder="e.g. 6500"
-                      value={manualVal}
-                      onChange={e => setManualVal(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && submitManual()}
-                      autoFocus
-                    />
-                    <button className="btn-action primary" onClick={submitManual}>Set</button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="chat-input-bar">
-            <input
-              type="text"
-              placeholder="Type a correction or question…"
-              value={inputVal}
-              onChange={e => setInputVal(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && sendFreeText()}
-            />
-            <button className="send-btn" onClick={sendFreeText}>Send</button>
-          </div>
-        </div>
-      );
-    }
-
     // ─── ExportScreen ─────────────────────────────────────────────────────────
     function ExportScreen({ accounts, taxYear, fxRate, credentials, onBack }) {
-      const active = accounts.filter(a => a.status !== 'closed');
-      const totalMax = active.reduce((s, a) => s + (a.newMax || 0), 0);
-      const totalYearEnd = active.reduce((s, a) => s + (a.newYearEnd || 0), 0);
-      const flagged = accounts.filter(a => a.notes).length;
+      const included = accounts.filter(a => a.include !== false);
+      const totalMax = included.reduce((s, a) => s + (a.newMax || 0), 0);
+      const totalYearEnd = included.reduce((s, a) => s + (a.newYearEnd || 0), 0);
+      const noValues = included.filter(a => !a.newMax && !a.newYearEnd).length;
 
       function downloadJSON() {
         const data = {
@@ -2138,36 +1974,41 @@ Return JSON array only (no markdown, no explanation):
             fxRateDate: `Dec 31, ${taxYear}`,
             totalMaxValueUSD: totalMax,
             totalYearEndValueUSD: totalYearEnd,
-            accounts: active.map(a => ({
+            accounts: included.map(a => ({
               institution: a.name,
               accountNumber: a.number,
               type: a.type,
-              currency: a.currency,
+              ownership: a.ownership || 'self',
+              currency: a.currency || 'INR',
+              maxValueINR: (a.newMax || 0) * fxRate,
               maxValueUSD: a.newMax || 0,
+              yearEndValueINR: (a.newYearEnd || 0) * fxRate,
               yearEndValueUSD: a.newYearEnd || 0,
-              status: a.status,
-              notes: a.notes || null
+              priorMaxValueUSD: a.priorMax || null,
+              priorYearEndValueUSD: a.priorYearEnd || null,
+              matchFile: a.matchFile || null,
+              source: a.source || 'manual'
             }))
           }
         };
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `FBAR_${taxYear}_data.json`;
-        a.click();
+        const el = document.createElement('a');
+        el.href = url;
+        el.download = `FBAR_${taxYear}_data.json`;
+        el.click();
         URL.revokeObjectURL(url);
       }
 
       return (
         <div className="export-main">
-          <button className="nav-back" onClick={onBack}>← Confirm</button>
+          <button className="nav-back" onClick={onBack}>← Match</button>
           <div className="page-title">Export FBAR {taxYear}</div>
           <div className="page-sub">Review summary and download your FBAR data for BSA e-filing.</div>
 
-          {flagged > 0 && (
+          {noValues > 0 && (
             <div className="warning-banner">
-              ⚠ {flagged} account{flagged > 1 ? 's' : ''} flagged — review before filing. These are using prior year values or have notes attached.
+              ⚠ {noValues} account{noValues > 1 ? 's have' : ' has'} no current-year values — fill them in on the Match screen before filing.
             </div>
           )}
 
@@ -2178,7 +2019,7 @@ Return JSON array only (no markdown, no explanation):
             </div>
             <div className="export-row">
               <span className="export-label">Accounts reported</span>
-              <span className="export-val">{active.length}</span>
+              <span className="export-val">{included.length}</span>
             </div>
             <div className="export-row">
               <span className="export-label">Total maximum value</span>
@@ -2198,6 +2039,29 @@ Return JSON array only (no markdown, no explanation):
                 <span className="export-val">{credentials.fullName}</span>
               </div>
             )}
+          </div>
+
+          <div style={{overflowX:'auto', marginBottom:24}}>
+            <table className="accounts-table" style={{width:'100%'}}>
+              <thead>
+                <tr>
+                  <th>Institution</th><th>Account #</th><th>Type</th>
+                  <th>Max (USD)</th><th>Year-end (USD)</th><th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {included.map(a => (
+                  <tr key={a.id}>
+                    <td>{a.name}</td>
+                    <td style={{fontFamily:'monospace', fontSize:11}}>{a.number || '—'}</td>
+                    <td>{a.type}</td>
+                    <td style={{textAlign:'right'}}>{a.newMax != null ? fmtUSD(a.newMax) : <span style={{color:'var(--red-text)'}}>missing</span>}</td>
+                    <td style={{textAlign:'right'}}>{a.newYearEnd != null ? fmtUSD(a.newYearEnd) : <span style={{color:'var(--red-text)'}}>missing</span>}</td>
+                    <td style={{fontSize:11, color:'var(--text3)'}}>{a.matchFile || a.source}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
           <div className="actions" style={{marginBottom: 24}}>
@@ -2226,19 +2090,8 @@ Return JSON array only (no markdown, no explanation):
       const [step, setStep] = useState('setup');
       const [taxYear, setTaxYear] = useState(new Date().getFullYear() - 1);
       const [credentials, setCredentials] = useState({ pan: '', dob: '', fullName: '' });
-      const [scanSources, setScanSources] = useState({ gmail: false, drive: false, local: false });
-      const [localFolder, setLocalFolder] = useState('~/Documents/tax-agent/inbox');
-      const [cacheDir, setCacheDir] = useState(null);        // FileSystemDirectoryHandle
-      const [cacheDirName, setCacheDirName] = useState('');  // display name
-      const cacheDirDB = useRef(null);                       // IDB instance
       const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gemini_key') || '');
-      const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem('google_client_id') || '');
-      const [gmailToken, setGmailToken] = useState(() => sessionStorage.getItem('gmail_token') || null);
       const [priorFbarFile, setPriorFbarFile] = useState(null);
-      const [uploadedStatements, setUploadedStatements] = useState([]);
-      const [priorManualAccounts, setPriorManualAccounts] = useState(() => {
-        try { return JSON.parse(localStorage.getItem('fbar_prior_manual') || '[]'); } catch(_) { return []; }
-      });
       const [accounts, setAccounts] = useState([]);
       const [fxRate, setFxRate] = useState(83.97);
 
@@ -2256,7 +2109,7 @@ Return JSON array only (no markdown, no explanation):
         return new File([bytes], name, { type });
       }
 
-      // Restore files and cache folder on mount
+      // Persist credentials and files across page refreshes
       useEffect(() => {
         const saved = localStorage.getItem('fbar_creds');
         if (saved) { try { setCredentials(JSON.parse(saved)); } catch(_) {} }
@@ -2264,20 +2117,6 @@ Return JSON array only (no markdown, no explanation):
           const f = sessionStorage.getItem('prior_fbar_file');
           if (f) setPriorFbarFile(sessionToFile(JSON.parse(f)));
         } catch(_) {}
-        try {
-          const s = sessionStorage.getItem('uploaded_statements');
-          if (s) setUploadedStatements(JSON.parse(s).map(sessionToFile));
-        } catch(_) {}
-
-        // Restore saved cache directory handle from IndexedDB
-        openCacheDB().then(async db => {
-          cacheDirDB.current = db;
-          const handle = await idbGet(db, 'cacheDir');
-          if (handle) {
-            setCacheDir(handle);
-            setCacheDirName(handle.name);
-          }
-        }).catch(() => {});
       }, []);
       useEffect(() => {
         if (credentials.pan || credentials.fullName) {
@@ -2285,43 +2124,12 @@ Return JSON array only (no markdown, no explanation):
         }
       }, [credentials]);
       useEffect(() => {
-        localStorage.setItem('fbar_prior_manual', JSON.stringify(priorManualAccounts));
-      }, [priorManualAccounts]);
-      useEffect(() => {
-        if (gmailToken) sessionStorage.setItem('gmail_token', gmailToken);
-        else sessionStorage.removeItem('gmail_token');
-      }, [gmailToken]);
-      useEffect(() => {
         if (priorFbarFile) {
           fileToSession(priorFbarFile).then(d => sessionStorage.setItem('prior_fbar_file', JSON.stringify(d))).catch(() => {});
         } else {
           sessionStorage.removeItem('prior_fbar_file');
         }
       }, [priorFbarFile]);
-      useEffect(() => {
-        if (uploadedStatements.length > 0) {
-          Promise.all(uploadedStatements.map(fileToSession))
-            .then(arr => sessionStorage.setItem('uploaded_statements', JSON.stringify(arr)))
-            .catch(() => {});
-        } else {
-          sessionStorage.removeItem('uploaded_statements');
-        }
-      }, [uploadedStatements]);
-
-      async function pickCacheFolder() {
-        if (!window.showDirectoryPicker) {
-          alert('Your browser does not support the File System Access API.\nUse Chrome or Edge to enable local caching.');
-          return;
-        }
-        try {
-          const handle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
-          setCacheDir(handle);
-          setCacheDirName(handle.name);
-          if (cacheDirDB.current) await idbPut(cacheDirDB.current, 'cacheDir', handle);
-        } catch(e) {
-          if (e.name !== 'AbortError') console.warn('pickCacheFolder:', e.message);
-        }
-      }
 
       function navigate(target) {
         if (typeof target === 'string' && STEPS.includes(target)) { setStep(target); return; }
@@ -2332,63 +2140,12 @@ Return JSON array only (no markdown, no explanation):
 
       function goBack() {
         const cur = STEPS.indexOf(step);
-        // scan goes back to setup; all others go to prior step
         if (cur > 0) setStep(STEPS[cur - 1]);
       }
 
       const initials = credentials.fullName
         ? credentials.fullName.split(' ').slice(0,2).map(w => w[0]).join('').toUpperCase()
         : 'JA';
-
-      // Acquire (or silently refresh) a Gmail access token via GIS
-      const gmailRefreshTimer = useRef(null);
-
-      function acquireGmailToken(interactive = false) {
-        if (!googleClientId || !window.google?.accounts?.oauth2) return;
-        const client = window.google.accounts.oauth2.initTokenClient({
-          client_id: googleClientId,
-          scope: 'https://www.googleapis.com/auth/gmail.readonly',
-          callback: (resp) => {
-            if (resp.error) {
-              if (interactive) alert('OAuth error: ' + resp.error);
-              return;
-            }
-            setGmailToken(resp.access_token);
-            // Schedule silent refresh at 55 minutes (token lasts 1 hour)
-            if (gmailRefreshTimer.current) clearTimeout(gmailRefreshTimer.current);
-            gmailRefreshTimer.current = setTimeout(() => acquireGmailToken(false), 55 * 60 * 1000);
-          }
-        });
-        // prompt:'' = silent if already consented, shows popup only if interactive=true
-        client.requestAccessToken({ prompt: interactive ? 'consent' : '' });
-      }
-
-      function connectGmail() {
-        if (!googleClientId) return;
-        if (!window.google?.accounts?.oauth2) {
-          alert('Google Identity Services still loading. Try again in a moment.');
-          return;
-        }
-        acquireGmailToken(true);
-      }
-
-      // On load: if Client ID is saved, silently try to restore the token
-      // (works if user is logged into Google and previously granted access)
-      useEffect(() => {
-        if (!googleClientId) return;
-        // Wait for GIS to load
-        const tryAuto = () => {
-          if (window.google?.accounts?.oauth2) {
-            acquireGmailToken(false);
-          } else {
-            setTimeout(tryAuto, 500);
-          }
-        };
-        setTimeout(tryAuto, 500);
-        return () => { if (gmailRefreshTimer.current) clearTimeout(gmailRefreshTimer.current); };
-      }, [googleClientId]);
-
-      const screenProps = { taxYear, fxRate, credentials, accounts, setAccounts, onNext: navigate, onBack: goBack };
 
       return (
         <div className="shell">
@@ -2401,32 +2158,42 @@ Return JSON array only (no markdown, no explanation):
           {step === 'setup' && (
             <SetupScreen
               credentials={credentials} setCredentials={setCredentials}
-              scanSources={scanSources} setScanSources={setScanSources}
-              localFolder={localFolder} setLocalFolder={setLocalFolder}
               geminiKey={geminiKey} setGeminiKey={setGeminiKey}
-              googleClientId={googleClientId} setGoogleClientId={setGoogleClientId}
-              gmailToken={gmailToken} setGmailToken={setGmailToken} connectGmail={connectGmail}
               priorFbarFile={priorFbarFile} setPriorFbarFile={setPriorFbarFile}
-              uploadedStatements={uploadedStatements} setUploadedStatements={setUploadedStatements}
-              priorManualAccounts={priorManualAccounts} setPriorManualAccounts={setPriorManualAccounts}
               taxYear={taxYear} onNext={navigate}
-              cacheDir={cacheDir} cacheDirName={cacheDirName} pickCacheFolder={pickCacheFolder}
             />
           )}
-          {step === 'scan' && (
-            <ScanScreen
-              taxYear={taxYear} geminiKey={geminiKey}
-              gmailToken={gmailToken} setGmailToken={setGmailToken}
-              priorFbarFile={priorFbarFile} uploadedStatements={uploadedStatements}
-              priorManualAccounts={priorManualAccounts}
-              setAccounts={setAccounts} setFxRate={setFxRate}
-              onNext={navigate} onBack={goBack}
-              cacheDir={cacheDir}
+          {step === 'accounts' && (
+            <AccountsScreen
+              taxYear={taxYear}
+              priorFbarFile={priorFbarFile}
+              geminiKey={geminiKey}
+              setFinalAccounts={setAccounts}
+              setFxRate={setFxRate}
+              onNext={navigate}
+              onBack={goBack}
             />
           )}
-          {step === 'review' && <ReviewScreen {...screenProps}/>}
-          {step === 'confirm' && <ConfirmScreen {...screenProps}/>}
-          {step === 'export' && <ExportScreen {...screenProps}/>}
+          {step === 'match' && (
+            <MatchScreen
+              taxYear={taxYear}
+              accounts={accounts}
+              setAccounts={setAccounts}
+              geminiKey={geminiKey}
+              fxRate={fxRate}
+              onNext={navigate}
+              onBack={goBack}
+            />
+          )}
+          {step === 'export' && (
+            <ExportScreen
+              accounts={accounts}
+              taxYear={taxYear}
+              fxRate={fxRate}
+              credentials={credentials}
+              onBack={goBack}
+            />
+          )}
         </div>
       );
     }
