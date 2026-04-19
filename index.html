@@ -1346,9 +1346,7 @@ Return JSON array only (no markdown, no explanation):
         accounts.filter(a => a.include).map(a => ({...a, matchStatus: 'pending', matchFile: null}))
       );
       const stmtRef = useRef();
-      // Keep a ref so runMatch always reads latest rows
-      const rowsRef = useRef(rows);
-      useEffect(() => { rowsRef.current = rows; }, [rows]);
+      const runningRef = useRef(false);
 
       // Fuzzy: does filename likely correspond to this account?
       function filenameMatch(accountName, filename) {
@@ -1365,53 +1363,89 @@ Return JSON array only (no markdown, no explanation):
         return p === r || p.includes(r) || r.includes(p);
       }
 
+      // Snapshot refs so async runMatch always sees current values
+      const stmtFilesRef = useRef(stmtFiles);
+      const rowsSnapRef  = useRef(rows);
+      useEffect(() => { stmtFilesRef.current = stmtFiles; }, [stmtFiles]);
+      useEffect(() => { rowsSnapRef.current  = rows; },      [rows]);
+
       async function runMatch() {
-        const files = stmtFiles;
-        if (!geminiKey || files.length === 0) return;
+        if (runningRef.current) return;
+        runningRef.current = true;
+        const files = stmtFilesRef.current;
+        const currentRows = rowsSnapRef.current;
+        const log = [];
+
+        console.log('[match] starting — files:', files.map(f=>f.name), 'rows:', currentRows.map(r=>r.name));
+
+        if (!geminiKey) {
+          setMatchLog(['✗ No Gemini API key — go back to Setup and enter your key.']);
+          setMatchDone(true);
+          runningRef.current = false;
+          return;
+        }
+        if (files.length === 0) {
+          setMatchLog(['✗ No files loaded — drop statement files first.']);
+          setMatchDone(true);
+          runningRef.current = false;
+          return;
+        }
+        if (currentRows.length === 0) {
+          setMatchLog(['✗ No accounts to match — go back to Accounts and add or load accounts.']);
+          setMatchDone(true);
+          runningRef.current = false;
+          return;
+        }
+
         setMatching(true);
         setMatchDone(false);
-        const log = [];
-        const currentRows = rowsRef.current;
 
-        for (const row of currentRows) {
-          // Find candidate files by fuzzy name match first; fall back to all files
-          const candidates = files.filter(f => filenameMatch(row.name, f.name));
-          const toTry = candidates.length > 0 ? candidates : files;
-          let matched = false;
+        try {
+          for (const row of currentRows) {
+            const candidates = files.filter(f => filenameMatch(row.name, f.name));
+            const toTry = candidates.length > 0 ? candidates : files;
+            log.push(`\n[${row.name}] candidates: ${candidates.length > 0 ? candidates.map(f=>f.name).join(', ') : 'none — trying all files'}`);
+            let matched = false;
 
-          for (const file of toTry) {
-            try {
-              log.push(`  scanning ${file.name} for "${row.name}"…`);
-              const parsed = await parseStatement(file, geminiKey);
-              log.push(`  → Gemini returned ${parsed.length} account(s): ${parsed.map(p=>p.institution_name).join(', ')}`);
-              const hit = parsed.find(p => instMatch(p.institution_name, row.name));
-              if (hit) {
-                const maxInr = hit.peak_balance_inr || hit.year_end_balance_inr || 0;
-                const yeInr  = hit.year_end_balance_inr || hit.peak_balance_inr || 0;
-                setRows(prev => prev.map(r => r.id === row.id ? {
-                  ...r,
-                  newMax: Math.round(maxInr / fxRate),
-                  newYearEnd: Math.round(yeInr / fxRate),
-                  matchFile: file.name,
-                  matchStatus: 'matched',
-                } : r));
-                log.push(`✓ ${row.name} ← ${file.name} (max ₹${maxInr.toLocaleString('en-IN')})`);
-                matched = true;
-                break;
+            for (const file of toTry) {
+              try {
+                log.push(`  → parsing ${file.name}…`);
+                const parsed = await parseStatement(file, geminiKey);
+                log.push(`  → Gemini: [${parsed.map(p=>p.institution_name).join(' | ') || 'empty'}]`);
+                const hit = parsed.find(p => instMatch(p.institution_name, row.name));
+                if (hit) {
+                  const maxInr = hit.peak_balance_inr || hit.year_end_balance_inr || 0;
+                  const yeInr  = hit.year_end_balance_inr || hit.peak_balance_inr || 0;
+                  setRows(prev => prev.map(r => r.id === row.id ? {
+                    ...r,
+                    newMax: Math.round(maxInr / fxRate),
+                    newYearEnd: Math.round(yeInr / fxRate),
+                    matchFile: file.name,
+                    matchStatus: 'matched',
+                  } : r));
+                  log.push(`  ✓ matched! max ₹${maxInr.toLocaleString('en-IN')}, yr-end ₹${yeInr.toLocaleString('en-IN')}`);
+                  matched = true;
+                  break;
+                } else {
+                  log.push(`  ✗ no hit (normInst: "${normInst(row.name)}" not in [${parsed.map(p=>normInst(p.institution_name)).join(', ')}])`);
+                }
+              } catch(e) {
+                log.push(`  ✗ error: ${e.message.slice(0,100)}`);
               }
-            } catch(e) {
-              log.push(`✗ ${file.name}: ${e.message.slice(0,80)}`);
+            }
+            if (!matched) {
+              setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
+              log.push(`  → manual entry needed`);
             }
           }
-          if (!matched) {
-            setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
-            log.push(`? ${row.name} — no match, enter manually`);
-          }
+        } catch(outerErr) {
+          log.push(`\n✗ Unexpected error: ${outerErr.message}`);
         }
 
         setMatchLog(log);
         setMatching(false);
         setMatchDone(true);
+        runningRef.current = false;
       }
 
       function handleDrop(e) {
@@ -1480,7 +1514,7 @@ Return JSON array only (no markdown, no explanation):
               )}
             </div>
             {stmtFiles.length > 0 && !matching && (
-              <button className="btn-primary" style={{whiteSpace:'nowrap', alignSelf:'center'}} onClick={runMatch} disabled={!geminiKey}>
+              <button className="btn-primary" style={{whiteSpace:'nowrap', alignSelf:'center'}} onClick={runMatch}>
                 {matchDone ? 'Re-match' : 'Start matching'}
               </button>
             )}
@@ -1552,11 +1586,11 @@ Return JSON array only (no markdown, no explanation):
             </table>
           </div>
 
-          {matchLog.length > 0 && (
-            <details style={{marginTop:12}}>
-              <summary style={{fontSize:11, color:'var(--text3)', cursor:'pointer'}}>Matching log ({matchLog.length} entries)</summary>
-              <pre style={{fontSize:11, color:'var(--text2)', marginTop:6, lineHeight:1.6, whiteSpace:'pre-wrap'}}>{matchLog.join('\n')}</pre>
-            </details>
+          {matchDone && (
+            <div style={{marginTop:12, padding:'10px 14px', background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:'var(--radius)'}}>
+              <div style={{fontSize:11, fontWeight:500, color:'var(--text3)', marginBottom:6}}>Matching log</div>
+              <pre style={{fontSize:11, color:'var(--text2)', lineHeight:1.7, whiteSpace:'pre-wrap', maxHeight:200, overflowY:'auto'}}>{matchLog.join('\n')}</pre>
+            </div>
           )}
 
           <div className="actions">
