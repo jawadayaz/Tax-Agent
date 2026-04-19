@@ -196,7 +196,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const APP_VERSION = 'v1.06';
+    const APP_VERSION = 'v1.07';
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -309,6 +309,13 @@
         }
         text += '\n';
       }
+      // Fix PDF.js splitting of Indian-format numbers across text items.
+      // e.g. "2,72,66,1 00" → "2,72,66,100"  or  "3,00,00 ,000" → "3,00,00,000"
+      text = text
+        // Case: last group split mid-way, e.g. "2,72,66,1 00" → "2,72,66,100"
+        .replace(/(\d{1,3}(?:,\d{2})*,\d{1,2})[ \t]+(\d{1,2})(?!\d)/g, '$1$2')
+        // Case: trailing 3-digit group separated by space, e.g. "3,00,00 000" → "3,00,00,000"
+        .replace(/(\d{1,3}(?:,\d{2})*)[ \t]+(\d{3})(?!\d)/g, '$1,$2');
       return text;
     }
 
@@ -1573,36 +1580,48 @@ Return JSON array only (no markdown, no explanation):
           for (const row of currentRows) {
             log.push(`\n[${row.name}]`);
 
-            let bestResult = null;
-            let bestFile   = null;
+            // Collect ALL files that match this account (score >= 0.3)
+            // so we can take the highest balance found across all of them.
+            const allMatches = [];
+            let topScoringResult = null;
+            let topScoringFile   = null;
 
             for (const { file, text } of fileTexts) {
               const result = findAccountInText(row.name, text);
               const score  = result?.score ?? 0;
               log.push(`  ${score >= 0.3 ? '✓' : '·'} ${file.name}  score ${score.toFixed(2)}`);
-              if (result && score > (bestResult?.score ?? 0)) {
-                bestResult = result;
-                bestFile   = file;
+              if (result && score >= 0.3) {
+                allMatches.push({ result, file });
+                if (score > (topScoringResult?.score ?? 0)) {
+                  topScoringResult = result;
+                  topScoringFile   = file;
+                }
               }
             }
 
-            if (bestResult && bestResult.score >= 0.3) {
+            if (allMatches.length > 0) {
+              // Max peak balance across all matching files
+              const maxPeak    = Math.max(...allMatches.map(m => m.result.peakBalance));
+              const maxYearEnd = Math.max(...allMatches.map(m => m.result.yearEndBalance));
+              const sourceFiles = allMatches.map(m => m.file.name).join(', ');
               setRows(prev => prev.map(r => r.id === row.id ? {
                 ...r,
-                name:        bestResult.institutionName,
-                number:      bestResult.accountNumber || r.number,
-                newMax:      Math.round(bestResult.peakBalance  / fxRate),
-                newYearEnd:  Math.round(bestResult.yearEndBalance / fxRate),
-                matchFile:   bestFile.name,
+                name:        topScoringResult.institutionName,
+                number:      topScoringResult.accountNumber || r.number,
+                newMax:      Math.round(maxPeak    / fxRate),
+                newYearEnd:  Math.round(maxYearEnd / fxRate),
+                matchFile:   allMatches.length === 1 ? topScoringFile.name : `${allMatches.length} files`,
                 matchStatus: 'matched',
               } : r));
-              log.push(`  → matched in "${bestFile.name}"`);
-              log.push(`     name: ${bestResult.institutionName}  acct: ${bestResult.accountNumber || '—'}`);
-              log.push(`     peak ₹${bestResult.peakBalance.toLocaleString('en-IN')}  yr-end ₹${bestResult.yearEndBalance.toLocaleString('en-IN')}`);
-              log.push(`     → ${fmtUSD(Math.round(bestResult.peakBalance/fxRate))} max  ${fmtUSD(Math.round(bestResult.yearEndBalance/fxRate))} yr-end`);
+              log.push(`  → matched across ${allMatches.length} file(s): ${sourceFiles}`);
+              log.push(`     name: ${topScoringResult.institutionName}  acct: ${topScoringResult.accountNumber || '—'}`);
+              log.push(`     peak ₹${maxPeak.toLocaleString('en-IN')}  → ${fmtUSD(Math.round(maxPeak/fxRate))} max`);
             } else {
+              const maxScore = allMatches.length === 0
+                ? Math.max(...fileTexts.map(ft => findAccountInText(row.name, ft.text)?.score ?? 0))
+                : 0;
               setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
-              log.push(`  → not found (max score ${bestResult?.score?.toFixed(2) ?? '0.00'}) — enter manually`);
+              log.push(`  → not found — enter manually`);
             }
           }
 
@@ -1702,14 +1721,13 @@ Return JSON array only (no markdown, no explanation):
                   <th rowSpan={2}>Acct #</th>
                   <th rowSpan={2}>Type</th>
                   <th colSpan={2} className="prior">{priorYear} prior</th>
-                  <th colSpan={2} className="new-grp">{taxYear} current year (USD)</th>
+                  <th className="new-grp">{taxYear} max (USD)</th>
                   <th rowSpan={2}>Source</th>
                 </tr>
                 <tr>
                   <th className="sub-prior">Max</th>
                   <th className="sub-prior-r">Yr-end</th>
-                  <th className="sub-new">Max</th>
-                  <th className="sub-new-r">Yr-end</th>
+                  <th className="sub-new">Highest balance</th>
                 </tr>
               </thead>
               <tbody>
@@ -1728,13 +1746,6 @@ Return JSON array only (no markdown, no explanation):
                         placeholder="—"
                         style={r.matchStatus==='matched' ? {color:'var(--green-text)', fontWeight:500} : {}}
                         onChange={e => updateRow(r.id, 'newMax', e.target.value)}/>
-                    </td>
-                    <td className="r">
-                      <input className="edit-cell"
-                        value={r.newYearEnd != null ? String(Math.round(r.newYearEnd)) : ''}
-                        placeholder="—"
-                        style={r.matchStatus==='matched' ? {color:'var(--green-text)', fontWeight:500} : {}}
-                        onChange={e => updateRow(r.id, 'newYearEnd', e.target.value)}/>
                     </td>
                     <td>
                       {r.matchFile
