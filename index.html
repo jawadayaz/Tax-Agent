@@ -196,7 +196,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const APP_VERSION = 'v1.05';
+    const APP_VERSION = 'v1.06';
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -394,49 +394,66 @@
       return filename.replace(/[_-]/g, ' ').replace(/\.\w{2,5}$/, '').trim();
     }
 
-    // Fuzzy match score: how well does account name match text from a document?
-    // Returns 0–1; higher = better match
-    function fuzzyScore(accountName, docText) {
-      const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
-      const words = s => norm(s).split(' ').filter(w => w.length > 2);
 
-      const aw = words(accountName);
-      const docLower = docText.toLowerCase();
+    // Search for a specific account name within a document's text.
+    // Uses a sliding window to find the region most relevant to that account,
+    // then extracts balance data from that region only.
+    // Works correctly for both single-account files and multi-account summaries.
+    function findAccountInText(accountName, fullText) {
+      const norm = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      const words = norm(accountName).split(' ').filter(w => w.length > 2);
+      if (words.length === 0) return null;
 
-      // Score: fraction of account name words found in the document
-      if (aw.length === 0) return 0;
-      const hits = aw.filter(w => docLower.includes(w)).length;
-      return hits / aw.length;
-    }
+      const lowerText = fullText.toLowerCase();
+      const WIN = 700;   // chars per window
+      const STEP = 50;
 
-    // Main client-side parser: given a File, return parsed account data
-    async function parseStatementLocal(file) {
-      const text = await extractTextFromFile(file);
+      let bestScore = 0;
+      let bestPos   = 0;
 
-      const institutionName = detectInstitutionFromText(text, file.name);
-      const accountNumber   = extractAccountNumber(text);
-
-      // Get labeled amounts first (most reliable), then fall back to all amounts
-      const labeled  = extractLabeledAmounts(text);
-      const allAmts  = extractAmounts(text);
-
-      // Pick peak balance: largest labeled amount, or largest overall
-      const labeledVals = labeled.map(l => l.value).sort((a,b) => b-a);
-      const peakBalance = labeledVals[0] || (allAmts.sort((a,b)=>b-a)[0]) || 0;
-
-      // Year-end balance: look for Dec 31 context, else use the first labeled "closing" / "value as on"
-      let yearEndBalance = peakBalance;
-      const dec31Re = /(?:31\s*dec|december\s*31|dec\s*31|31\/12)/i;
-      const dec31pos = text.search(dec31Re);
-      if (dec31pos !== -1) {
-        const snippet = text.slice(dec31pos, dec31pos + 200);
-        const re = /(\d{1,3}(?:,\d{2})*(?:,\d{3})|\d{5,})(?:\.\d{1,2})?/g;
-        const found = [...snippet.matchAll(re)].map(m => parseFloat(m[1].replace(/,/g,'')));
-        const validFound = found.filter(n => n >= 1000).sort((a,b)=>b-a);
-        if (validFound.length > 0) yearEndBalance = validFound[0];
+      for (let i = 0; i <= Math.max(0, lowerText.length - WIN); i += STEP) {
+        const chunk = lowerText.slice(i, i + WIN);
+        const hits  = words.filter(w => chunk.includes(w)).length;
+        const score = hits / words.length;
+        if (score > bestScore) { bestScore = score; bestPos = i; }
       }
 
-      return { institutionName, accountNumber, peakBalance, yearEndBalance, text };
+      if (bestScore < 0.3) return null;
+
+      // Expand around best window for richer context
+      const start  = Math.max(0, bestPos - 100);
+      const end    = Math.min(fullText.length, bestPos + WIN + 400);
+      const region = fullText.slice(start, end);
+
+      // Institution name: first meaningful capitalised line in region
+      const skipRe = /^[\d\s,./%-]+$|pg\s*\d|page\s*\d/i;
+      let institutionName = accountName;
+      for (const line of region.split('\n').map(l => l.trim()).filter(l => l.length > 3 && l.length < 100)) {
+        if (skipRe.test(line)) continue;
+        if (/^[A-Z]/.test(line) && /[a-zA-Z]{3,}/.test(line) &&
+            !/\b(street|road|nagar|park|flat|floor|plot|sector|dist|pin|mobile|email|tel)\b/i.test(line)) {
+          institutionName = line;
+          break;
+        }
+      }
+
+      const accountNumber = extractAccountNumber(region);
+
+      // Labeled amounts are most reliable; fall back to all amounts
+      const labeledVals = extractLabeledAmounts(region).map(l => l.value).sort((a,b) => b-a);
+      const allAmts     = extractAmounts(region).sort((a,b) => b-a);
+      const peakBalance = labeledVals[0] || allAmts[0] || 0;
+
+      // Look for Dec-31 balance in region
+      let yearEndBalance = peakBalance;
+      const dec31pos = region.search(/(?:31[\s/-]?dec|december[\s/-]?31|31\/12)/i);
+      if (dec31pos !== -1) {
+        const snip  = region.slice(dec31pos, dec31pos + 200);
+        const found = extractAmounts(snip).sort((a,b) => b-a);
+        if (found.length > 0) yearEndBalance = found[0];
+      }
+
+      return { score: bestScore, institutionName, accountNumber, peakBalance, yearEndBalance };
     }
 
     // ─── Gmail scan queries ────────────────────────────────────────────────────
@@ -1526,59 +1543,66 @@ Return JSON array only (no markdown, no explanation):
         setMatchDone(false);
 
         try {
-          // ── Step 1: extract text + data from each file ────────────────────
-          log.push(`Parsing ${files.length} file(s)…`);
+          // ── Step 1: extract text from every file ──────────────────────────
+          log.push(`Reading ${files.length} file(s)…`);
           setMatchLog([...log]);
 
-          const parsed = [];
+          const fileTexts = [];
           for (const file of files) {
             try {
-              const result = await parseStatementLocal(file);
-              parsed.push({ file, ...result });
-              log.push(`  ✓ ${file.name}  →  "${result.institutionName}"  acct: ${result.accountNumber || '—'}`);
-              log.push(`     peak ₹${result.peakBalance.toLocaleString('en-IN')}  yr-end ₹${result.yearEndBalance.toLocaleString('en-IN')}`);
+              const text = await extractTextFromFile(file);
+              fileTexts.push({ file, text });
+              log.push(`  ✓ ${file.name}  (${text.length.toLocaleString()} chars extracted)`);
             } catch(e) {
               log.push(`  ✗ ${file.name}: ${e.message}`);
             }
           }
 
-          if (parsed.length === 0) {
+          if (fileTexts.length === 0) {
             log.push('✗ Could not read any files.');
             setMatchLog([...log]); setMatching(false); setMatchDone(true);
             runningRef.current = false; return;
           }
 
-          // ── Step 2: match each account to the best-scoring file ───────────
-          log.push(`\nMatching ${currentRows.length} account(s)…`);
+          // ── Step 2: for each account, search across all files ─────────────
+          // Summary files (CAMS CAS, portfolio XLS) are handled naturally:
+          // each account searches for its own name in the file and extracts
+          // the balance from that specific section only.
+          log.push(`\nMatching ${currentRows.length} account(s) across ${fileTexts.length} file(s)…`);
 
           for (const row of currentRows) {
-            // Score each parsed file against this account name
-            const scores = parsed.map(p => ({
-              p,
-              score: fuzzyScore(row.name, p.text),
-            }));
-            scores.sort((a, b) => b.score - a.score);
-            const best = scores[0];
+            log.push(`\n[${row.name}]`);
 
-            log.push(`\n  [${row.name}]`);
-            scores.forEach(s => log.push(`    ${s.score.toFixed(2)}  ${s.p.file.name}`));
+            let bestResult = null;
+            let bestFile   = null;
 
-            // Threshold: at least one word of the account name must appear in the doc
-            if (best && best.score >= 0.3) {
-              const p = best.p;
+            for (const { file, text } of fileTexts) {
+              const result = findAccountInText(row.name, text);
+              const score  = result?.score ?? 0;
+              log.push(`  ${score >= 0.3 ? '✓' : '·'} ${file.name}  score ${score.toFixed(2)}`);
+              if (result && score > (bestResult?.score ?? 0)) {
+                bestResult = result;
+                bestFile   = file;
+              }
+            }
+
+            if (bestResult && bestResult.score >= 0.3) {
               setRows(prev => prev.map(r => r.id === row.id ? {
                 ...r,
-                name:       p.institutionName,
-                number:     p.accountNumber || r.number,
-                newMax:     Math.round(p.peakBalance / fxRate),
-                newYearEnd: Math.round(p.yearEndBalance / fxRate),
-                matchFile:  p.file.name,
+                name:        bestResult.institutionName,
+                number:      bestResult.accountNumber || r.number,
+                newMax:      Math.round(bestResult.peakBalance  / fxRate),
+                newYearEnd:  Math.round(bestResult.yearEndBalance / fxRate),
+                matchFile:   bestFile.name,
                 matchStatus: 'matched',
               } : r));
-              log.push(`    → matched to "${p.institutionName}"  score ${best.score.toFixed(2)}`);
+              log.push(`  → matched in "${bestFile.name}"`);
+              log.push(`     name: ${bestResult.institutionName}  acct: ${bestResult.accountNumber || '—'}`);
+              log.push(`     peak ₹${bestResult.peakBalance.toLocaleString('en-IN')}  yr-end ₹${bestResult.yearEndBalance.toLocaleString('en-IN')}`);
+              log.push(`     → ${fmtUSD(Math.round(bestResult.peakBalance/fxRate))} max  ${fmtUSD(Math.round(bestResult.yearEndBalance/fxRate))} yr-end`);
             } else {
               setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
-              log.push(`    → no match (best score ${best?.score.toFixed(2) || 0} < 0.3) — enter manually`);
+              log.push(`  → not found (max score ${bestResult?.score?.toFixed(2) ?? '0.00'}) — enter manually`);
             }
           }
 
