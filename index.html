@@ -196,7 +196,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const APP_VERSION = 'v1.07';
+    const APP_VERSION = 'v1.08';
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -337,12 +337,14 @@
       const labeled = [];
 
       // Patterns: "label ... amount" within ~100 chars
+      // NOTE: 'total commitment' intentionally excluded — it's invested capital, not current value.
+      // NAV/current value keywords are listed first so they win when sorted by value.
       const keywords = [
-        'closing balance', 'net balance', 'available balance', 'account balance',
-        'current value', 'portfolio value', 'market value', 'total value',
-        'nav', 'net asset value', 'total amount', 'total commitment',
         'pre-tax nav', 'post-tax nav', 'pre tax nav', 'post tax nav',
-        'year end value', 'yearend', 'balance as on', 'value as on',
+        'nav', 'net asset value',
+        'current value', 'portfolio value', 'market value', 'total value',
+        'closing balance', 'net balance', 'available balance', 'account balance',
+        'total amount', 'year end value', 'yearend', 'balance as on', 'value as on',
       ];
 
       for (const kw of keywords) {
@@ -432,11 +434,16 @@
       const end    = Math.min(fullText.length, bestPos + WIN + 400);
       const region = fullText.slice(start, end);
 
-      // Institution name: first meaningful capitalised line in region
+      // Institution name: first meaningful capitalised line in region that looks like a fund/bank name.
+      // Skip metadata field lines (e.g. "Holding : Single 2nd Holder : NA NA"),
+      // address words, and purely numeric/date lines.
       const skipRe = /^[\d\s,./%-]+$|pg\s*\d|page\s*\d/i;
-      let institutionName = accountName;
-      for (const line of region.split('\n').map(l => l.trim()).filter(l => l.length > 3 && l.length < 100)) {
+      // Lines with " : " are typically label:value metadata rows, not institution names
+      const metaRe = /\s:\s|\b(holding|holder|single|joint|nominee|pan|folio|type|mode|status|scheme|plan|option)\b/i;
+      let institutionName = accountName; // default to account name if no clean line found
+      for (const line of region.split('\n').map(l => l.trim()).filter(l => l.length > 3 && l.length < 80)) {
         if (skipRe.test(line)) continue;
+        if (metaRe.test(line)) continue;
         if (/^[A-Z]/.test(line) && /[a-zA-Z]{3,}/.test(line) &&
             !/\b(street|road|nagar|park|flat|floor|plot|sector|dist|pin|mobile|email|tel)\b/i.test(line)) {
           institutionName = line;
