@@ -191,10 +191,12 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const APP_VERSION = 'v1.04';
+    const APP_VERSION = 'v1.05';
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -263,6 +265,178 @@
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) throw new Error('Empty Gemini response');
       return JSON.parse(text);
+    }
+
+    // ─── Client-side statement parser (no API needed) ────────────────────────
+
+    // Configure PDF.js worker
+    (function() {
+      if (window.pdfjsLib) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+    })();
+
+    // Extract all text from a file (PDF, XLS/XLSX, CSV)
+    async function extractTextFromFile(file) {
+      const name = file.name.toLowerCase();
+
+      if (name.endsWith('.csv')) {
+        return file.text();
+      }
+
+      if (name.endsWith('.xls') || name.endsWith('.xlsx')) {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array' });
+        return wb.SheetNames
+          .map(s => XLSX.utils.sheet_to_csv(wb.Sheets[s]))
+          .join('\n');
+      }
+
+      // PDF via PDF.js
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      let text = '';
+      for (let p = 1; p <= pdf.numPages; p++) {
+        const page = await pdf.getPage(p);
+        const content = await page.getTextContent();
+        // Preserve rough line structure
+        let lastY = null;
+        for (const item of content.items) {
+          if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) text += '\n';
+          text += item.str + ' ';
+          lastY = item.transform[5];
+        }
+        text += '\n';
+      }
+      return text;
+    }
+
+    // Parse INR amounts from text (handles Indian number format: 3,00,00,000)
+    function extractAmounts(text) {
+      const results = [];
+      // Match Indian-format numbers with optional ₹/Rs prefix
+      const re = /(?:₹|Rs\.?\s*)?(\d{1,3}(?:,\d{2})*(?:,\d{3})|\d{4,})(?:\.\d{1,2})?(?!\d)/g;
+      for (const m of text.matchAll(re)) {
+        const n = parseFloat(m[1].replace(/,/g, ''));
+        if (n >= 1000) results.push(n); // ignore small amounts (fees, percentages etc.)
+      }
+      return results;
+    }
+
+    // Extract balance amounts near key financial labels
+    function extractLabeledAmounts(text) {
+      const lower = text.toLowerCase();
+      const labeled = [];
+
+      // Patterns: "label ... amount" within ~100 chars
+      const keywords = [
+        'closing balance', 'net balance', 'available balance', 'account balance',
+        'current value', 'portfolio value', 'market value', 'total value',
+        'nav', 'net asset value', 'total amount', 'total commitment',
+        'pre-tax nav', 'post-tax nav', 'pre tax nav', 'post tax nav',
+        'year end value', 'yearend', 'balance as on', 'value as on',
+      ];
+
+      for (const kw of keywords) {
+        let pos = 0;
+        while ((pos = lower.indexOf(kw, pos)) !== -1) {
+          const snippet = text.slice(pos, pos + 150);
+          const re = /(\d{1,3}(?:,\d{2})*(?:,\d{3})|\d{5,})(?:\.\d{1,2})?/g;
+          for (const m of snippet.matchAll(re)) {
+            const n = parseFloat(m[1].replace(/,/g, ''));
+            if (n >= 1000) labeled.push({ label: kw, value: n });
+          }
+          pos += kw.length;
+        }
+      }
+      return labeled;
+    }
+
+    // Extract account/folio number
+    function extractAccountNumber(text) {
+      const patterns = [
+        /folio\s*(?:no|number|#)?\s*:?\s*([\w\d]+)/i,
+        /account\s*(?:no|number|#)?\s*:?\s*(\*?[\w\d*]+)/i,
+        /client\s*(?:id|code)\s*:?\s*([\w\d]+)/i,
+        /dp\s*(?:id|account)\s*:?\s*([\w\d]+)/i,
+        /policy\s*(?:no|number)\s*:?\s*([\w\d]+)/i,
+      ];
+      for (const re of patterns) {
+        const m = text.match(re);
+        if (m) {
+          const raw = m[1].replace(/\*/g, '');
+          return `****${raw.slice(-4)}`;
+        }
+      }
+      return null;
+    }
+
+    // Detect institution name from document text
+    function detectInstitutionFromText(text, filename) {
+      const lines = text.split('\n')
+        .map(l => l.trim())
+        .filter(l => l.length > 3 && l.length < 100);
+
+      // Skip lines that are purely numeric, dates, or addresses
+      const skipRe = /^[\d\s,./%-]+$|^\d{1,2}[\s/-]\w+[\s/-]\d{4}|pg\s*\d|page\s*\d/i;
+
+      // First ~15 lines — look for institution-like text (mixed alpha, starts with alpha)
+      for (const line of lines.slice(0, 15)) {
+        if (skipRe.test(line)) continue;
+        if (/^[A-Z]/.test(line) && /[a-zA-Z]{3,}/.test(line)) {
+          // Skip if it looks like a person's name / address (contains common address words)
+          if (/\b(street|road|nagar|colony|park|flat|floor|plot|sector|phase|dist|pin|state)\b/i.test(line)) continue;
+          return line;
+        }
+      }
+      // Fallback: filename without extension
+      return filename.replace(/[_-]/g, ' ').replace(/\.\w{2,5}$/, '').trim();
+    }
+
+    // Fuzzy match score: how well does account name match text from a document?
+    // Returns 0–1; higher = better match
+    function fuzzyScore(accountName, docText) {
+      const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+      const words = s => norm(s).split(' ').filter(w => w.length > 2);
+
+      const aw = words(accountName);
+      const docLower = docText.toLowerCase();
+
+      // Score: fraction of account name words found in the document
+      if (aw.length === 0) return 0;
+      const hits = aw.filter(w => docLower.includes(w)).length;
+      return hits / aw.length;
+    }
+
+    // Main client-side parser: given a File, return parsed account data
+    async function parseStatementLocal(file) {
+      const text = await extractTextFromFile(file);
+
+      const institutionName = detectInstitutionFromText(text, file.name);
+      const accountNumber   = extractAccountNumber(text);
+
+      // Get labeled amounts first (most reliable), then fall back to all amounts
+      const labeled  = extractLabeledAmounts(text);
+      const allAmts  = extractAmounts(text);
+
+      // Pick peak balance: largest labeled amount, or largest overall
+      const labeledVals = labeled.map(l => l.value).sort((a,b) => b-a);
+      const peakBalance = labeledVals[0] || (allAmts.sort((a,b)=>b-a)[0]) || 0;
+
+      // Year-end balance: look for Dec 31 context, else use the first labeled "closing" / "value as on"
+      let yearEndBalance = peakBalance;
+      const dec31Re = /(?:31\s*dec|december\s*31|dec\s*31|31\/12)/i;
+      const dec31pos = text.search(dec31Re);
+      if (dec31pos !== -1) {
+        const snippet = text.slice(dec31pos, dec31pos + 200);
+        const re = /(\d{1,3}(?:,\d{2})*(?:,\d{3})|\d{5,})(?:\.\d{1,2})?/g;
+        const found = [...snippet.matchAll(re)].map(m => parseFloat(m[1].replace(/,/g,'')));
+        const validFound = found.filter(n => n >= 1000).sort((a,b)=>b-a);
+        if (validFound.length > 0) yearEndBalance = validFound[0];
+      }
+
+      return { institutionName, accountNumber, peakBalance, yearEndBalance, text };
     }
 
     // ─── Gmail scan queries ────────────────────────────────────────────────────
@@ -1053,11 +1227,10 @@ Return JSON array only (no markdown, no explanation):
     }
 
     // ─── SetupScreen ──────────────────────────────────────────────────────────
-    function SetupScreen({ credentials, setCredentials, geminiKey, setGeminiKey,
+    function SetupScreen({ credentials, setCredentials,
                            priorFbarFile, setPriorFbarFile, taxYear, onNext }) {
       const fileRef = useRef();
       const priorYear = taxYear - 1;
-      const [editingKey, setEditingKey] = useState(!geminiKey);
 
       function handleCred(key, val) {
         setCredentials(prev => ({ ...prev, [key]: val }));
@@ -1083,28 +1256,6 @@ Return JSON array only (no markdown, no explanation):
           </div>
           {!priorFbarFile && <div style={{fontSize:12, color:'var(--text3)', marginBottom:8}}>No FBAR? You can add accounts manually in the next step.</div>}
 
-          <hr className="divider"/>
-
-          <div className="section-label">Gemini API key</div>
-          <div className="field-row">
-            {geminiKey && !editingKey ? (
-              <div style={{display:'flex', alignItems:'center', gap:10, padding:'8px 10px', border:'0.5px solid var(--green-border)', borderRadius:'var(--radius)', background:'var(--green-bg)'}}>
-                <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ Key set</span>
-                <span style={{fontSize:12, color:'var(--green-text)', fontFamily:'monospace', opacity:0.7}}>···{geminiKey.slice(-4)}</span>
-                <button className="btn-ghost" style={{fontSize:12, marginLeft:'auto', padding:'3px 10px'}} onClick={() => setEditingKey(true)}>Update key</button>
-              </div>
-            ) : (
-              <div>
-                <input type="password" placeholder="AIza… (stored locally, used only to parse PDFs/XLS via Google AI)"
-                  value={geminiKey} autoFocus={editingKey}
-                  onChange={e => { setGeminiKey(e.target.value); localStorage.setItem('gemini_key', e.target.value); }}/>
-                {geminiKey && editingKey && (
-                  <button className="btn-ghost" style={{fontSize:12, marginTop:6}} onClick={() => setEditingKey(false)}>Cancel</button>
-                )}
-              </div>
-            )}
-            <div className="field-hint">Required to read statement files. Get a free key at aistudio.google.com/app/apikey</div>
-          </div>
 
           <hr className="divider"/>
 
@@ -1141,7 +1292,7 @@ Return JSON array only (no markdown, no explanation):
     }
 
     // ─── AccountsScreen ───────────────────────────────────────────────────────
-    function AccountsScreen({ taxYear, priorFbarFile, geminiKey, initialAccounts, setFinalAccounts, setFxRate, onNext, onBack }) {
+    function AccountsScreen({ taxYear, priorFbarFile, initialAccounts, setFinalAccounts, setFxRate, onNext, onBack }) {
       const priorYear = taxYear - 1;
       const [loading, setLoading] = useState(initialAccounts.length === 0);
       const [error, setError]   = useState(null);
@@ -1336,7 +1487,7 @@ Return JSON array only (no markdown, no explanation):
     }
 
     // ─── MatchScreen ──────────────────────────────────────────────────────────
-    function MatchScreen({ taxYear, accounts, setAccounts, geminiKey, fxRate, onNext, onBack }) {
+    function MatchScreen({ taxYear, accounts, setAccounts, fxRate, onNext, onBack }) {
       const priorYear = taxYear - 1;
       const [stmtFiles, setStmtFiles] = useState([]);
       const [matching, setMatching]   = useState(false);
@@ -1362,11 +1513,6 @@ Return JSON array only (no markdown, no explanation):
         const currentRows = rowsSnapRef.current;
         const log = [];
 
-        // Guard checks — always show log
-        if (!geminiKey) {
-          setMatchLog(['✗ No Gemini API key — go back to Setup and enter your key.']);
-          setMatchDone(true); runningRef.current = false; return;
-        }
         if (files.length === 0) {
           setMatchLog(['✗ No files — drop statement files above first.']);
           setMatchDone(true); runningRef.current = false; return;
@@ -1380,113 +1526,64 @@ Return JSON array only (no markdown, no explanation):
         setMatchDone(false);
 
         try {
-          // ── Step 1: read all files as base64 ──────────────────────────────
-          log.push(`Reading ${files.length} file(s)…`);
+          // ── Step 1: extract text + data from each file ────────────────────
+          log.push(`Parsing ${files.length} file(s)…`);
           setMatchLog([...log]);
 
-          const fileParts = [];
+          const parsed = [];
           for (const file of files) {
             try {
-              const b64 = await readFileAsBase64(file);
-              const mime = file.type ||
-                (file.name.endsWith('.pdf')  ? 'application/pdf' :
-                 file.name.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' :
-                 file.name.endsWith('.xls')  ? 'application/vnd.ms-excel' : 'text/plain');
-              fileParts.push({ b64, mime, name: file.name });
-              log.push(`  ✓ ${file.name}`);
+              const result = await parseStatementLocal(file);
+              parsed.push({ file, ...result });
+              log.push(`  ✓ ${file.name}  →  "${result.institutionName}"  acct: ${result.accountNumber || '—'}`);
+              log.push(`     peak ₹${result.peakBalance.toLocaleString('en-IN')}  yr-end ₹${result.yearEndBalance.toLocaleString('en-IN')}`);
             } catch(e) {
               log.push(`  ✗ ${file.name}: ${e.message}`);
             }
           }
 
-          if (fileParts.length === 0) {
-            log.push('✗ Could not read any files.'); throw new Error('no files');
+          if (parsed.length === 0) {
+            log.push('✗ Could not read any files.');
+            setMatchLog([...log]); setMatching(false); setMatchDone(true);
+            runningRef.current = false; return;
           }
 
-          // ── Step 2: single Gemini call — all files + all accounts ──────────
-          const accountList = currentRows.map((r, i) =>
-            `${i}: ${r.name}${r.number && r.number !== '????' ? ' (acct ' + r.number + ')' : ''} [${TYPE_LABELS[r.type] || r.type}]`
-          ).join('\n');
+          // ── Step 2: match each account to the best-scoring file ───────────
+          log.push(`\nMatching ${currentRows.length} account(s)…`);
 
-          log.push(`\nSending ${fileParts.length} document(s) + ${currentRows.length} accounts to Gemini…`);
-          setMatchLog([...log]);
+          for (const row of currentRows) {
+            // Score each parsed file against this account name
+            const scores = parsed.map(p => ({
+              p,
+              score: fuzzyScore(row.name, p.text),
+            }));
+            scores.sort((a, b) => b.score - a.score);
+            const best = scores[0];
 
-          const prompt = `You are reading Indian financial statements to extract FBAR account data.
+            log.push(`\n  [${row.name}]`);
+            scores.forEach(s => log.push(`    ${s.score.toFixed(2)}  ${s.p.file.name}`));
 
-ACCOUNTS TO FIND (index: name [type]):
-${accountList}
-
-FILES PROVIDED (by index): ${fileParts.map((f, i) => `[${i}] ${f.name}`).join(', ')}
-
-Instructions:
-- Search all documents for each account listed above
-- Match by institution/fund/broker name — ignore minor spelling differences
-- Extract the EXACT institution name as printed in the document
-- Extract peak/maximum balance AND year-end (or latest) balance, both in INR
-- If an account appears in multiple files, use the most recent or most complete statement
-- If an account is not found in any document, set matched: false
-
-Return a JSON array — one entry per account, in the same order as the accounts list:
-[{
-  "account_index": <0-based index>,
-  "matched": <true|false>,
-  "institution_name": "<exact name from document>",
-  "account_number": "<****XXXX — last 4 of account/folio/DP ID, prefix ****>",
-  "file_index": <0-based file index, or null>,
-  "peak_balance_inr": <number or null>,
-  "year_end_balance_inr": <number or null>,
-  "statement_period": "<e.g. Apr 2024 – Mar 2025 or Dec 31, 2024>",
-  "note": "<anything relevant: joint holder, type of account, etc.>"
-}]
-
-Return ONLY the JSON array. No markdown fences, no explanation.`;
-
-          const parts = fileParts.map(f => ({ inlineData: { mimeType: f.mime, data: f.b64 } }));
-          parts.push({ text: prompt });
-
-          const resp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
-            { method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contents: [{ parts }], generationConfig: { responseMimeType: 'application/json' } }) }
-          );
-          if (!resp.ok) {
-            const err = await resp.text();
-            throw new Error(`Gemini ${resp.status}: ${err.slice(0,300)}`);
-          }
-          const data = await resp.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!text) throw new Error('Empty Gemini response');
-          const results = JSON.parse(text);
-
-          // ── Step 3: apply results ──────────────────────────────────────────
-          log.push(`\nResults (${results.filter(r=>r.matched).length} matched, ${results.filter(r=>!r.matched).length} not found):`);
-          for (const res of results) {
-            const row = currentRows[res.account_index];
-            if (!row) continue;
-            if (res.matched) {
-              const maxInr = res.peak_balance_inr || res.year_end_balance_inr || 0;
-              const yeInr  = res.year_end_balance_inr || res.peak_balance_inr || 0;
-              const fileName = fileParts[res.file_index]?.name || '?';
+            // Threshold: at least one word of the account name must appear in the doc
+            if (best && best.score >= 0.3) {
+              const p = best.p;
               setRows(prev => prev.map(r => r.id === row.id ? {
                 ...r,
-                name:       res.institution_name || r.name,
-                number:     res.account_number   || r.number,
-                newMax:     Math.round(maxInr / fxRate),
-                newYearEnd: Math.round(yeInr  / fxRate),
-                matchFile:  fileName,
+                name:       p.institutionName,
+                number:     p.accountNumber || r.number,
+                newMax:     Math.round(p.peakBalance / fxRate),
+                newYearEnd: Math.round(p.yearEndBalance / fxRate),
+                matchFile:  p.file.name,
                 matchStatus: 'matched',
               } : r));
-              log.push(`  ✓ [${res.account_index}] ${res.institution_name}  |  max ₹${maxInr.toLocaleString('en-IN')}  yr-end ₹${yeInr.toLocaleString('en-IN')}  ← ${fileName}`);
-              if (res.statement_period) log.push(`     period: ${res.statement_period}`);
-              if (res.note) log.push(`     note: ${res.note}`);
+              log.push(`    → matched to "${p.institutionName}"  score ${best.score.toFixed(2)}`);
             } else {
               setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
-              log.push(`  ? [${res.account_index}] ${row.name} — not found in documents`);
+              log.push(`    → no match (best score ${best?.score.toFixed(2) || 0} < 0.3) — enter manually`);
             }
           }
 
         } catch(e) {
-          if (e.message !== 'no files') log.push(`\n✗ Error: ${e.message}`);
+          log.push(`\n✗ Unexpected error: ${e.message}`);
         }
 
         setMatchLog([...log]);
@@ -1572,11 +1669,6 @@ Return ONLY the JSON array. No markdown fences, no explanation.`;
           <input ref={stmtRef} type="file" accept=".pdf,.xls,.xlsx,.csv" multiple style={{display:'none'}}
             onChange={e => addFiles(Array.from(e.target.files))}/>
 
-          {!geminiKey && (
-            <div style={{padding:'10px 14px', background:'var(--amber-bg)', border:'0.5px solid var(--amber-border)', borderRadius:'var(--radius)', fontSize:12, color:'var(--amber-text)', marginBottom:14}}>
-              Gemini API key not set — go back to Setup to add it, or enter values manually below.
-            </div>
-          )}
 
           <div className="tbl-outer">
             <table>
@@ -2277,7 +2369,6 @@ Return ONLY the JSON array. No markdown fences, no explanation.`;
       const [step, setStep] = useState('setup');
       const [taxYear, setTaxYear] = useState(new Date().getFullYear() - 1);
       const [credentials, setCredentials] = useState({ pan: '', dob: '', fullName: '' });
-      const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem('gemini_key') || '');
       const [priorFbarFile, setPriorFbarFile] = useState(null);
       const [accounts, setAccounts] = useState([]);
       const [fxRate, setFxRate] = useState(83.97);
@@ -2345,7 +2436,6 @@ Return ONLY the JSON array. No markdown fences, no explanation.`;
           {step === 'setup' && (
             <SetupScreen
               credentials={credentials} setCredentials={setCredentials}
-              geminiKey={geminiKey} setGeminiKey={setGeminiKey}
               priorFbarFile={priorFbarFile} setPriorFbarFile={setPriorFbarFile}
               taxYear={taxYear} onNext={navigate}
             />
@@ -2354,7 +2444,6 @@ Return ONLY the JSON array. No markdown fences, no explanation.`;
             <AccountsScreen
               taxYear={taxYear}
               priorFbarFile={priorFbarFile}
-              geminiKey={geminiKey}
               initialAccounts={accounts}
               setFinalAccounts={setAccounts}
               setFxRate={setFxRate}
@@ -2367,7 +2456,6 @@ Return ONLY the JSON array. No markdown fences, no explanation.`;
               taxYear={taxYear}
               accounts={accounts}
               setAccounts={setAccounts}
-              geminiKey={geminiKey}
               fxRate={fxRate}
               onNext={navigate}
               onBack={goBack}
