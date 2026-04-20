@@ -196,7 +196,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const APP_VERSION = 'v1.09';
+    const APP_VERSION = 'v1.10';
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -1260,23 +1260,71 @@ Return JSON array only (no markdown, no explanation):
 
     // ─── SetupScreen ──────────────────────────────────────────────────────────
     function SetupScreen({ credentials, setCredentials,
-                           priorFbarFile, setPriorFbarFile, taxYear, onNext }) {
+                           priorFbarFile, setPriorFbarFile,
+                           taxYear, geminiKey, setGeminiKey,
+                           driveToken, setDriveToken, onNext }) {
       const fileRef = useRef();
-      const priorYear = taxYear - 1;
+      const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem('google_client_id') || '');
+      const [keyVisible, setKeyVisible] = useState(false);
+      const [connectingDrive, setConnectingDrive] = useState(false);
+      const [driveConnected, setDriveConnected] = useState(!!driveToken);
+      const isFileOrigin = window.location.protocol === 'file:';
 
       function handleCred(key, val) {
         setCredentials(prev => ({ ...prev, [key]: val }));
       }
 
+      function connectGoogleDrive() {
+        if (!googleClientId) return;
+        setConnectingDrive(true);
+        try {
+          const client = google.accounts.oauth2.initTokenClient({
+            client_id: googleClientId,
+            scope: 'https://www.googleapis.com/auth/drive.readonly',
+            callback: (resp) => {
+              setConnectingDrive(false);
+              if (resp.access_token) {
+                setDriveToken(resp.access_token);
+                setDriveConnected(true);
+              }
+            },
+            error_callback: () => setConnectingDrive(false),
+          });
+          client.requestAccessToken();
+        } catch(e) { setConnectingDrive(false); }
+      }
+
       const canProceed = credentials.pan.length >= 10 && credentials.dob && credentials.fullName.length >= 2;
+      const keyMasked = geminiKey ? (keyVisible ? geminiKey : '···' + geminiKey.slice(-4)) : '';
 
       return (
         <div className="main">
           <div className="page-title">Set up {taxYear} FBAR</div>
-          <div className="page-sub">Upload your {priorYear} FBAR to load prior accounts, then match {taxYear} statements to fill in current-year values.</div>
+          <div className="page-sub">Upload your prior FBAR if you have one, enter your details, and add a Gemini API key to enable AI-powered statement matching.</div>
 
-          <div className="section-label">Prior year FBAR ({priorYear})</div>
-          <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:8}}>
+          <div className="section-label">Gemini API key</div>
+          <div style={{marginBottom:16}}>
+            <div style={{display:'flex', gap:8, alignItems:'center'}}>
+              {geminiKey ? (
+                <>
+                  <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ Key set</span>
+                  <span style={{fontSize:12, color:'var(--text3)', fontFamily:'monospace'}}>{keyMasked}</span>
+                  <button className="btn-ghost" style={{fontSize:11, padding:'3px 8px'}} onClick={() => setKeyVisible(v => !v)}>{keyVisible ? 'hide' : 'show'}</button>
+                  <button className="btn-ghost" style={{fontSize:11, padding:'3px 8px'}} onClick={() => setGeminiKey('')}>remove</button>
+                </>
+              ) : (
+                <input type="password" placeholder="AIza…"
+                  style={{maxWidth:340}}
+                  onChange={e => setGeminiKey(e.target.value.trim())}/>
+              )}
+            </div>
+            <div className="field-hint">Needed for AI account discovery and statement matching. Get a free key at aistudio.google.com.</div>
+          </div>
+
+          <hr className="divider"/>
+
+          <div className="section-label">Prior year FBAR ({taxYear - 1}) — optional</div>
+          <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:4}}>
             {priorFbarFile
               ? <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ {priorFbarFile.name}
                   <button style={{background:'none', border:'none', cursor:'pointer', color:'var(--text3)', fontSize:11, marginLeft:6}} onClick={() => { setPriorFbarFile(null); fileRef.current.value=''; }}>remove</button>
@@ -1286,13 +1334,14 @@ Return JSON array only (no markdown, no explanation):
             <input ref={fileRef} type="file" accept=".pdf,.xml" style={{display:'none'}}
               onChange={e => { if (e.target.files[0]) setPriorFbarFile(e.target.files[0]); }}/>
           </div>
-          {!priorFbarFile && <div style={{fontSize:12, color:'var(--text3)', marginBottom:8}}>No FBAR? You can add accounts manually in the next step.</div>}
-
+          <div style={{fontSize:12, color:'var(--text3)', marginBottom:4}}>
+            {priorFbarFile ? 'Accounts will be pre-loaded from this file.' : 'No prior FBAR? You can add accounts manually or from a summary file in the next step.'}
+          </div>
 
           <hr className="divider"/>
 
-          <div className="section-label">Your credentials</div>
-          <div className="privacy-note">Used only to open password-protected PDFs. Never sent to any AI model.</div>
+          <div className="section-label">Your details</div>
+          <div className="privacy-note">Used to open password-protected PDFs. Never sent to any AI model.</div>
           <div className="field-group">
             <div className="field-row">
               <label>PAN</label>
@@ -1313,6 +1362,40 @@ Return JSON array only (no markdown, no explanation):
               onChange={e => handleCred('fullName', e.target.value)}/>
           </div>
 
+          <hr className="divider"/>
+
+          <div className="section-label">Google Drive access — optional</div>
+          <div style={{fontSize:12, color:'var(--text2)', marginBottom:10, lineHeight:1.6}}>
+            Connect to fetch account lists from Google Sheets or Google Docs in the next step.
+          </div>
+          {driveConnected ? (
+            <div style={{display:'flex', alignItems:'center', gap:10}}>
+              <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ Google Drive connected</span>
+              <button className="btn-ghost" style={{fontSize:11}} onClick={() => { setDriveToken(''); setDriveConnected(false); }}>disconnect</button>
+            </div>
+          ) : isFileOrigin ? (
+            <div style={{fontSize:12, color:'var(--text3)', background:'var(--bg2)', borderRadius:'var(--radius)', padding:'10px 12px', lineHeight:1.6}}>
+              Google OAuth requires a real URL. Serve locally: <code style={{background:'var(--bg3)', padding:'1px 5px', borderRadius:3, fontSize:11}}>python3 -m http.server 8080</code> then open <strong>http://localhost:8080</strong>, or deploy via <code style={{fontSize:11}}>app-deploy tax-agent</code>.
+            </div>
+          ) : (
+            <div>
+              <div style={{fontSize:12, color:'var(--text2)', marginBottom:8, lineHeight:1.7}}>
+                One-time setup: <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" style={{color:'var(--blue)'}}>console.cloud.google.com</a> → Create project → Enable Drive API → Credentials → OAuth 2.0 Client ID (Web application) → add <code style={{background:'var(--bg3)', padding:'1px 5px', borderRadius:3, fontSize:11}}>{window.location.origin}</code> as authorized JavaScript origin.
+              </div>
+              <div style={{display:'flex', gap:8, alignItems:'center'}}>
+                <input type="text" placeholder="Client ID (…apps.googleusercontent.com)"
+                  value={googleClientId}
+                  onChange={e => { setGoogleClientId(e.target.value); localStorage.setItem('google_client_id', e.target.value); }}
+                  style={{flex:1, maxWidth:380}}/>
+                <button className="btn-primary" style={{fontSize:12, whiteSpace:'nowrap'}}
+                  disabled={!googleClientId || connectingDrive}
+                  onClick={connectGoogleDrive}>
+                  {connectingDrive ? 'Connecting…' : 'Connect Drive →'}
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="actions">
             <button className="btn-primary" disabled={!canProceed} style={{opacity: canProceed ? 1 : 0.4}} onClick={onNext}>
               Load accounts →
@@ -1324,7 +1407,7 @@ Return JSON array only (no markdown, no explanation):
     }
 
     // ─── AccountsScreen ───────────────────────────────────────────────────────
-    function AccountsScreen({ taxYear, priorFbarFile, initialAccounts, setFinalAccounts, setFxRate, onNext, onBack }) {
+    function AccountsScreen({ taxYear, priorFbarFile, initialAccounts, setFinalAccounts, setFxRate, geminiKey, driveToken, onNext, onBack }) {
       const priorYear = taxYear - 1;
       const [loading, setLoading] = useState(initialAccounts.length === 0);
       const [error, setError]   = useState(null);
@@ -1332,11 +1415,19 @@ Return JSON array only (no markdown, no explanation):
       const [showAdd, setShowAdd] = useState(false);
       const [newRow, setNewRow] = useState({ name:'', type:'other', number:'' });
 
-      // Sync to App state on every change so navigating back doesn't lose data
+      // Discovery panel state
+      const [discoverMode, setDiscoverMode] = useState('text'); // 'text' | 'file' | 'google'
+      const [discoverText, setDiscoverText] = useState('');
+      const [discoverFile, setDiscoverFile] = useState(null);
+      const [discoverLink, setDiscoverLink] = useState('');
+      const [discovering, setDiscovering] = useState(false);
+      const [discoverLog, setDiscoverLog] = useState('');
+      const discoverFileRef = useRef();
+
       useEffect(() => { setFinalAccounts(accts); }, [accts]);
 
       useEffect(() => {
-        if (initialAccounts.length > 0) return; // already loaded, don't clobber
+        if (initialAccounts.length > 0) return;
         async function load() {
           let rate = 83.97;
           try {
@@ -1365,7 +1456,7 @@ Return JSON array only (no markdown, no explanation):
                   matchFile: null, matchStatus: 'pending',
                 })));
               } else {
-                setError('No accounts extracted from PDF — add accounts manually below.');
+                setError('No accounts extracted from FBAR PDF — add accounts below.');
               }
             } catch(e) {
               setError('Could not read FBAR: ' + e.message);
@@ -1394,6 +1485,129 @@ Return JSON array only (no markdown, no explanation):
         setShowAdd(false);
       }
 
+      function addDiscoveredAccounts(list) {
+        const existingNames = new Set(accts.map(a => a.name.toLowerCase().trim()));
+        const toAdd = list.filter(a => a.name && !existingNames.has(a.name.toLowerCase().trim()));
+        setAccts(prev => [...prev, ...toAdd.map((a, i) => ({
+          id: String(Date.now() + i),
+          name: a.name.trim(),
+          number: a.number || '????',
+          type: a.type || 'other',
+          ownership: 'sole', joint_owner: null, currency: 'INR',
+          include: true, source: 'discovered',
+          priorMax: null, priorYearEnd: null,
+          newMax: null, newYearEnd: null,
+          matchFile: null, matchStatus: 'pending',
+        }))]);
+        return toAdd.length;
+      }
+
+      // Extract account list from text using Gemini
+      async function geminiExtractAccounts(text) {
+        const prompt = `From the following text, extract all Indian financial accounts held by a US person for FBAR reporting.
+Include: bank accounts, brokerage/demat accounts, mutual fund folios, AIF/PMS accounts.
+Exclude: individual stocks, ETF names, fund scheme names, CAMS/KFintech/NSDL/CDSL (these are platforms not account holders).
+Return ONLY a JSON array (no markdown):
+[{"name": "institution name as written", "type": "bank|brokerage|mf|other", "number": "****XXXX or null"}]
+If you find a comma-separated list of names, treat each as a separate account with type "other".
+Text:
+${text.slice(0, 20000)}`;
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+          {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+              contents: [{parts:[{text: prompt}]}],
+              generationConfig: {responseMimeType:'application/json'}
+            })
+          }
+        );
+        if (!resp.ok) throw new Error(`Gemini ${resp.status}: ${(await resp.text()).slice(0,200)}`);
+        const data = await resp.json();
+        const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!raw) throw new Error('Empty Gemini response');
+        return JSON.parse(raw);
+      }
+
+      // Extract Google Doc/Sheets ID from URL
+      function extractGoogleId(url) {
+        const m = url.match(/\/d\/([a-zA-Z0-9_-]{20,})/);
+        return m ? m[1] : null;
+      }
+
+      function isGoogleSheets(url) { return url.includes('spreadsheets'); }
+
+      async function fetchGoogleContent(url) {
+        const fileId = extractGoogleId(url);
+        if (!fileId) throw new Error('Could not extract file ID from URL');
+
+        const mimeType = isGoogleSheets(url) ? 'text/csv' : 'text/plain';
+        const exportUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=${encodeURIComponent(mimeType)}`;
+
+        // Try with auth first (works for private files)
+        if (driveToken) {
+          const r = await fetch(exportUrl, { headers: { Authorization: `Bearer ${driveToken}` } });
+          if (r.ok) return r.text();
+          if (r.status !== 401 && r.status !== 403) throw new Error(`Drive API error ${r.status}`);
+        }
+
+        // Fall back to public export (works for "anyone with link can view")
+        const publicUrl = isGoogleSheets(url)
+          ? `https://docs.google.com/spreadsheets/d/${fileId}/export?format=csv&gid=0`
+          : `https://docs.google.com/document/d/${fileId}/export?format=txt`;
+        const r2 = await fetch(publicUrl);
+        if (r2.ok) return r2.text();
+        throw new Error('Could not access this document. Make sure it is shared publicly or connect Google Drive in Setup.');
+      }
+
+      async function runDiscovery() {
+        if (discovering) return;
+        if (!geminiKey) { setDiscoverLog('✗ Add a Gemini API key in Setup first.'); return; }
+        setDiscovering(true);
+        setDiscoverLog('');
+        try {
+          let text = '';
+          if (discoverMode === 'text') {
+            if (!discoverText.trim()) { setDiscoverLog('✗ Enter account names or paste text.'); setDiscovering(false); return; }
+            // If it looks like a simple comma/newline list, skip Gemini and parse directly
+            const lines = discoverText.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
+            if (lines.every(l => l.length < 60 && !l.includes(':') && !l.includes('\t'))) {
+              const added = addDiscoveredAccounts(lines.map(name => ({ name, type: 'other', number: null })));
+              setDiscoverLog(`✓ Added ${added} account${added !== 1 ? 's' : ''} from text.`);
+              setDiscoverText('');
+              setDiscovering(false);
+              return;
+            }
+            text = discoverText;
+          } else if (discoverMode === 'file') {
+            if (!discoverFile) { setDiscoverLog('✗ Select a file first.'); setDiscovering(false); return; }
+            setDiscoverLog(`Reading ${discoverFile.name}…`);
+            text = await extractTextFromFile(discoverFile);
+          } else if (discoverMode === 'google') {
+            if (!discoverLink.trim()) { setDiscoverLog('✗ Paste a Google Sheets or Docs link.'); setDiscovering(false); return; }
+            setDiscoverLog('Fetching from Google…');
+            text = await fetchGoogleContent(discoverLink.trim());
+          }
+
+          setDiscoverLog('Asking Gemini to identify accounts…');
+          const list = await geminiExtractAccounts(text);
+          if (!Array.isArray(list) || list.length === 0) {
+            setDiscoverLog('✗ No accounts found. Try different text or a different file.');
+            setDiscovering(false);
+            return;
+          }
+          const added = addDiscoveredAccounts(list);
+          setDiscoverLog(`✓ Found ${list.length} account${list.length !== 1 ? 's' : ''}, added ${added} new.`);
+          if (discoverMode === 'file') setDiscoverFile(null);
+          if (discoverMode === 'google') setDiscoverLink('');
+          if (discoverMode === 'text') setDiscoverText('');
+        } catch(e) {
+          setDiscoverLog('✗ ' + e.message);
+        }
+        setDiscovering(false);
+      }
+
       function proceed() {
         setFinalAccounts(accts);
         onNext();
@@ -1403,7 +1617,7 @@ Return JSON array only (no markdown, no explanation):
 
       if (loading) return (
         <div className="main" style={{display:'flex', alignItems:'center', gap:10, color:'var(--text2)', fontSize:14}}>
-          <span className="spin-icon">↻</span> Reading {priorFbarFile ? priorFbarFile.name : 'FBAR'}…
+          <span className="spin-icon">↻</span> Reading {priorFbarFile ? priorFbarFile.name : 'accounts'}…
         </div>
       );
 
@@ -1412,66 +1626,57 @@ Return JSON array only (no markdown, no explanation):
           <button className="nav-back" onClick={onBack}>← Setup</button>
           <div className="top-row">
             <div>
-              <div className="page-title">{priorYear} accounts — {taxYear} FBAR baseline</div>
-              <div className="page-sub">Toggle off accounts you won't report in {taxYear}, delete closed accounts, or add new ones.</div>
+              <div className="page-title">{taxYear} FBAR — accounts</div>
+              <div className="page-sub">Review accounts from your prior FBAR, then add any new or missing accounts. Toggle off accounts you won't report.</div>
             </div>
             <div className="stat-row">
               <div className="stat"><div className="stat-val">{included}</div><div className="stat-label">included</div></div>
-              <div className="stat"><div className="stat-val" style={{color:'var(--text3)'}}>{accts.length - included}</div><div className="stat-label">excluded</div></div>
             </div>
           </div>
 
-          {error && <div style={{padding:'10px 14px', background:'var(--amber-bg)', border:'0.5px solid var(--amber-border)', borderRadius:'var(--radius)', fontSize:13, color:'var(--amber-text)', marginBottom:16}}>{error}</div>}
+          {error && <div className="demo-banner">{error}</div>}
 
-          <div className="tbl-outer">
-            <table>
-              <thead>
-                <tr>
-                  <th>Institution</th>
-                  <th>Account #</th>
-                  <th>Type</th>
-                  <th>Ownership</th>
-                  <th style={{textAlign:'right'}}>Prior max (USD)</th>
-                  <th style={{textAlign:'right'}}>Prior yr-end</th>
-                  <th style={{textAlign:'center'}}>Include in {taxYear}</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {accts.map(a => (
-                  <tr key={a.id} style={{opacity: a.include ? 1 : 0.45}}>
-                    <td>
-                      <div style={{fontWeight:500, fontSize:13}}>{a.name}</div>
-                      {a.via && <div style={{fontSize:11, color:'var(--text3)'}}>via {a.via}</div>}
-                    </td>
-                    <td className="mono">{a.number}</td>
-                    <td>{TYPE_LABELS[a.type] || a.type}</td>
-                    <td style={{fontSize:11, color:'var(--text3)'}}>
-                      {a.ownership === 'joint'
-                        ? <span style={{color:'var(--amber-text)'}}>joint{a.joint_owner ? ` · ${a.joint_owner.slice(0,25)}` : ''}</span>
-                        : a.ownership === 'sigauth' ? 'sig auth' : 'sole'}
-                    </td>
-                    <td style={{textAlign:'right', color:'var(--text2)'}}>{fmtUSD(a.priorMax)}</td>
-                    <td style={{textAlign:'right', color:'var(--text2)'}}>{fmtUSD(a.priorYearEnd)}</td>
-                    <td style={{textAlign:'center'}}>
-                      <div className={`toggle${a.include ? ' on' : ''}`} style={{margin:'0 auto'}}
-                        onClick={() => setAccts(prev => prev.map(x => x.id === a.id ? {...x, include: !x.include} : x))}>
-                        <div className="toggle-thumb"/>
-                      </div>
-                    </td>
-                    <td>
-                      <button style={{background:'none', border:'none', cursor:'pointer', color:'var(--text3)', fontSize:14, padding:'2px 6px'}}
-                        onClick={() => setAccts(prev => prev.filter(x => x.id !== a.id))}
-                        title="Delete account">×</button>
-                    </td>
+          {/* Accounts table */}
+          {accts.length > 0 && (
+            <div className="tbl-outer" style={{marginBottom:16}}>
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{width:28}}>✓</th>
+                    <th>Institution</th>
+                    <th>Acct #</th>
+                    <th>Type</th>
+                    <th>Source</th>
+                    <th style={{textAlign:'right'}}>Prior max</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {accts.map(a => (
+                    <tr key={a.id} className={!a.include ? 'row-closed' : ''}>
+                      <td>
+                        <input type="checkbox" checked={!!a.include}
+                          onChange={e => setAccts(prev => prev.map(r => r.id === a.id ? {...r, include: e.target.checked} : r))}/>
+                      </td>
+                      <td style={{fontWeight:500, fontSize:13}}>{a.name}</td>
+                      <td className="mono">{a.number}</td>
+                      <td style={{fontSize:12}}>{TYPE_LABELS[a.type] || a.type}</td>
+                      <td><span className="chip">{a.source || 'manual'}</span></td>
+                      <td className="muted">{fmtUSD(a.priorMax)}</td>
+                      <td>
+                        <button onClick={() => setAccts(prev => prev.filter(r => r.id !== a.id))}
+                          style={{background:'none', border:'none', cursor:'pointer', color:'var(--text3)', fontSize:14, padding:'2px 6px'}}>×</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
+          {/* Manual add */}
           {showAdd ? (
-            <div style={{marginTop:16, padding:'14px 16px', background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:'var(--radius)'}}>
+            <div style={{marginBottom:16, padding:'14px 16px', background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:'var(--radius)'}}>
               <div style={{fontSize:13, fontWeight:500, marginBottom:10}}>Add account</div>
               <div style={{display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:10, marginBottom:10}}>
                 <div>
@@ -1506,8 +1711,71 @@ Return JSON array only (no markdown, no explanation):
               </div>
             </div>
           ) : (
-            <button className="btn-ghost" style={{marginTop:14, fontSize:13}} onClick={() => setShowAdd(true)}>+ Add account</button>
+            <button className="btn-ghost" style={{marginBottom:16, fontSize:13}} onClick={() => setShowAdd(true)}>+ Add account manually</button>
           )}
+
+          {/* Discover accounts section */}
+          <div style={{border:'0.5px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden', marginBottom:20}}>
+            <div style={{padding:'10px 14px', background:'var(--bg2)', borderBottom:'0.5px solid var(--border)', display:'flex', alignItems:'center', gap:8}}>
+              <span style={{fontSize:12, fontWeight:500, color:'var(--text2)'}}>Discover accounts</span>
+              <span style={{fontSize:11, color:'var(--text3)'}}>— extract from a list, file, or Google Sheet</span>
+            </div>
+            <div style={{padding:'14px 16px'}}>
+              {/* Mode tabs */}
+              <div style={{display:'flex', gap:6, marginBottom:14}}>
+                {[['text','Type / paste'], ['file','Upload file'], ['google','Google Sheet / Doc']].map(([mode, label]) => (
+                  <button key={mode}
+                    className={discoverMode === mode ? 'btn-primary' : 'btn-ghost'}
+                    style={{fontSize:12, padding:'5px 12px'}}
+                    onClick={() => setDiscoverMode(mode)}>{label}</button>
+                ))}
+              </div>
+
+              {discoverMode === 'text' && (
+                <div>
+                  <textarea
+                    placeholder={"Comma-separated: HDFC Bank, Zerodha, Clarus Capital I\nOr paste any text containing account names…"}
+                    value={discoverText}
+                    onChange={e => setDiscoverText(e.target.value)}
+                    style={{width:'100%', minHeight:90, padding:'8px 10px', border:'0.5px solid var(--border2)', borderRadius:'var(--radius)', fontSize:13, fontFamily:'inherit', resize:'vertical', outline:'none', background:'var(--bg)'}}/>
+                </div>
+              )}
+
+              {discoverMode === 'file' && (
+                <div>
+                  {discoverFile
+                    ? <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ {discoverFile.name}
+                        <button style={{background:'none', border:'none', cursor:'pointer', color:'var(--text3)', fontSize:11, marginLeft:6}} onClick={() => setDiscoverFile(null)}>remove</button>
+                      </span>
+                    : <button className="btn-ghost" onClick={() => discoverFileRef.current.click()}>Browse for summary XLS/PDF…</button>
+                  }
+                  <input ref={discoverFileRef} type="file" accept=".pdf,.xls,.xlsx,.csv" style={{display:'none'}}
+                    onChange={e => { if (e.target.files[0]) setDiscoverFile(e.target.files[0]); }}/>
+                  <div className="field-hint" style={{marginTop:6}}>Upload a CAMS/NSDL CAS, portfolio summary, or any multi-account statement. Gemini will extract the account names.</div>
+                </div>
+              )}
+
+              {discoverMode === 'google' && (
+                <div>
+                  <input type="text" placeholder="https://docs.google.com/spreadsheets/d/…"
+                    value={discoverLink}
+                    onChange={e => setDiscoverLink(e.target.value)}
+                    style={{marginBottom:6}}/>
+                  <div className="field-hint">For private sheets, connect Google Drive in Setup first. Public (anyone with link) sheets work without login.</div>
+                </div>
+              )}
+
+              <div style={{display:'flex', alignItems:'center', gap:10, marginTop:12}}>
+                <button className="btn-secondary" style={{fontSize:12}}
+                  disabled={discovering || !geminiKey}
+                  onClick={runDiscovery}>
+                  {discovering ? <span><span className="spinner">↻</span> Finding accounts…</span> : 'Find accounts'}
+                </button>
+                {!geminiKey && <span style={{fontSize:11, color:'var(--text3)'}}>Add Gemini key in Setup to enable</span>}
+                {discoverLog && <span style={{fontSize:12, color: discoverLog.startsWith('✗') ? 'var(--red-text)' : discoverLog.startsWith('✓') ? 'var(--green-text)' : 'var(--text2)'}}>{discoverLog}</span>}
+              </div>
+            </div>
+          </div>
 
           <div className="actions">
             <button className="btn-primary" disabled={included === 0} style={{opacity: included ? 1 : 0.4}} onClick={proceed}>
@@ -1519,19 +1787,17 @@ Return JSON array only (no markdown, no explanation):
     }
 
     // ─── MatchScreen ──────────────────────────────────────────────────────────
-    function MatchScreen({ taxYear, accounts, setAccounts, fxRate, onNext, onBack }) {
+    function MatchScreen({ taxYear, accounts, setAccounts, fxRate, geminiKey, onNext, onBack }) {
       const priorYear = taxYear - 1;
       const [stmtFiles, setStmtFiles] = useState([]);
       const [matching, setMatching]   = useState(false);
       const [matchDone, setMatchDone] = useState(false);
       const [matchLog, setMatchLog]   = useState([]);
       const [rows, setRows]           = useState(() =>
-        accounts.filter(a => a.include).map(a => ({...a, matchStatus: 'pending', matchFile: null}))
+        accounts.filter(a => a.include).map(a => ({...a, matchStatus: 'pending', matchFile: null, statementPeriod: null, coversYear: true}))
       );
       const stmtRef = useRef();
       const runningRef = useRef(false);
-
-      // Snapshot refs so async runMatch always sees latest state
       const stmtFilesRef = useRef(stmtFiles);
       const rowsSnapRef  = useRef(rows);
       useEffect(() => { stmtFilesRef.current = stmtFiles; }, [stmtFiles]);
@@ -1550,7 +1816,11 @@ Return JSON array only (no markdown, no explanation):
           setMatchDone(true); runningRef.current = false; return;
         }
         if (currentRows.length === 0) {
-          setMatchLog(['✗ No accounts — go back to Accounts and load or add accounts.']);
+          setMatchLog(['✗ No accounts — go back to Accounts.']);
+          setMatchDone(true); runningRef.current = false; return;
+        }
+        if (!geminiKey) {
+          setMatchLog(['✗ No Gemini API key — add one in Setup.']);
           setMatchDone(true); runningRef.current = false; return;
         }
 
@@ -1558,8 +1828,8 @@ Return JSON array only (no markdown, no explanation):
         setMatchDone(false);
 
         try {
-          // ── Step 1: extract text from every file ──────────────────────────
-          log.push(`Reading ${files.length} file(s)…`);
+          // Step 1: extract text from every file
+          log.push(`Extracting text from ${files.length} file(s)…`);
           setMatchLog([...log]);
 
           const fileTexts = [];
@@ -1567,11 +1837,12 @@ Return JSON array only (no markdown, no explanation):
             try {
               const text = await extractTextFromFile(file);
               fileTexts.push({ file, text });
-              log.push(`  ✓ ${file.name}  (${text.length.toLocaleString()} chars extracted)`);
+              log.push(`  ✓ ${file.name}  (${text.length.toLocaleString()} chars)`);
             } catch(e) {
               log.push(`  ✗ ${file.name}: ${e.message}`);
             }
           }
+          setMatchLog([...log]);
 
           if (fileTexts.length === 0) {
             log.push('✗ Could not read any files.');
@@ -1579,62 +1850,97 @@ Return JSON array only (no markdown, no explanation):
             runningRef.current = false; return;
           }
 
-          // ── Step 2: for each account, search across all files ─────────────
-          // Summary files (CAMS CAS, portfolio XLS) are handled naturally:
-          // each account searches for its own name in the file and extracts
-          // the balance from that specific section only.
-          log.push(`\nMatching ${currentRows.length} account(s) across ${fileTexts.length} file(s)…`);
+          // Step 2: build single Gemini prompt with all accounts + all file texts
+          const accountList = currentRows.map((r, i) => `${i+1}. ${r.name}`).join('\n');
+          const statementsBlock = fileTexts.map(({file, text}) =>
+            `\n=== FILE: ${file.name} ===\n${text.slice(0, 80000)}`
+          ).join('\n');
 
-          for (const row of currentRows) {
-            log.push(`\n[${row.name}]`);
+          const prompt = `You are analyzing financial statements for FBAR (FinCEN 114) filing for US tax year ${taxYear}.
 
-            // Collect ALL files that confidently match this account.
-            // Threshold 0.5 + at least 2 word hits to avoid false positives from
-            // common financial terms (e.g. "securities", "bank") appearing in unrelated docs.
-            const MATCH_THRESHOLD = 0.5;
-            const MATCH_MIN_HITS  = 2;
-            const allMatches = [];
-            let topScoringResult = null;
-            let topScoringFile   = null;
+For each account listed below, search ALL provided statements and return one JSON object with:
+- "matched": true if found in any statement, false otherwise
+- "peak_balance_inr": HIGHEST balance in INR across ALL statements for this account (integer, 0 if not found).
+  CRITICAL: Use NAV / current value / portfolio value / market value.
+  Do NOT use: committed capital / invested amount / cost basis / total commitment.
+- "statement_period": period covered e.g. "Apr 2024 – Mar 2025" or "Jan–Dec 2024" (null if not found)
+- "covers_tax_year": true if the statement covers any part of ${taxYear}, false if it only covers a different year
+- "notes": one-line note e.g. "Pre-tax NAV ₹2.72Cr used across 2 files" or "Statement is FY2023-24 only"
 
-            for (const { file, text } of fileTexts) {
-              const result = findAccountInText(row.name, text);
-              const score  = result?.score ?? 0;
-              const hits   = result?._hits ?? 0;
-              const ok     = score >= MATCH_THRESHOLD && hits >= MATCH_MIN_HITS;
-              log.push(`  ${ok ? '✓' : '·'} ${file.name}  score ${score.toFixed(2)}  hits ${hits}`);
-              if (ok) {
-                allMatches.push({ result, file });
-                if (score > (topScoringResult?.score ?? 0)) {
-                  topScoringResult = result;
-                  topScoringFile   = file;
-                }
-              }
+If an account appears in multiple statements, combine them — use the highest peak_balance_inr found.
+
+Accounts to find (return exactly one JSON object per account, in the SAME ORDER):
+${accountList}
+
+Return ONLY a JSON array. No markdown, no explanation.
+
+${statementsBlock}`;
+
+          log.push(`\nSending to Gemini (${currentRows.length} accounts, ${fileTexts.length} files)…`);
+          setMatchLog([...log]);
+
+          const resp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+            {
+              method: 'POST',
+              headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({
+                contents: [{parts:[{text: prompt}]}],
+                generationConfig: {responseMimeType:'application/json'},
+              })
             }
+          );
 
-            if (allMatches.length > 0) {
-              // Max peak balance across all matching files.
-              // Never overwrite name/number — those come from the FBAR and are correct.
-              const maxPeak    = Math.max(...allMatches.map(m => m.result.peakBalance));
-              const maxYearEnd = Math.max(...allMatches.map(m => m.result.yearEndBalance));
-              const sourceFiles = allMatches.map(m => m.file.name).join(', ');
-              setRows(prev => prev.map(r => r.id === row.id ? {
-                ...r,
-                newMax:      Math.round(maxPeak    / fxRate),
-                newYearEnd:  Math.round(maxYearEnd / fxRate),
-                matchFile:   allMatches.length === 1 ? topScoringFile.name : `${allMatches.length} files`,
-                matchStatus: 'matched',
-              } : r));
-              log.push(`  → matched across ${allMatches.length} file(s): ${sourceFiles}`);
-              log.push(`     peak ₹${maxPeak.toLocaleString('en-IN')}  → ${fmtUSD(Math.round(maxPeak/fxRate))} max`);
-            } else {
-              setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
-              log.push(`  → not found — enter manually`);
-            }
+          if (!resp.ok) {
+            const err = await resp.text();
+            throw new Error(`Gemini ${resp.status}: ${err.slice(0,300)}`);
           }
 
+          const data = await resp.json();
+          const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!raw) throw new Error('Empty Gemini response');
+
+          let results;
+          try { results = JSON.parse(raw); }
+          catch(e) { throw new Error('Could not parse Gemini response as JSON: ' + raw.slice(0,200)); }
+
+          if (!Array.isArray(results)) throw new Error('Gemini did not return an array');
+
+          log.push(`\nGemini returned ${results.length} result(s):`);
+
+          // Step 3: apply results to rows
+          setRows(prev => prev.map((r, i) => {
+            const res = results[i];
+            if (!res) return r;
+            const matched = res.matched && res.peak_balance_inr > 0;
+            const newMax = matched ? Math.round(res.peak_balance_inr / fxRate) : null;
+            const period = res.statement_period || null;
+            const coversYear = res.covers_tax_year !== false; // default true if missing
+            const note = res.notes || '';
+
+            if (matched) {
+              log.push(`  ✓ ${r.name}`);
+              log.push(`     ₹${res.peak_balance_inr.toLocaleString('en-IN')} → ${fmtUSD(newMax)}`);
+              if (period) log.push(`     period: ${period}${!coversYear ? '  ⚠ OUTSIDE TAX YEAR' : ''}`);
+              if (note) log.push(`     note: ${note}`);
+            } else {
+              log.push(`  · ${r.name} — not found`);
+              if (note) log.push(`     ${note}`);
+            }
+
+            return {
+              ...r,
+              newMax,
+              newYearEnd: newMax,
+              matchFile: matched ? fileTexts.map(ft => ft.file.name).join(', ').slice(0, 40) : null,
+              matchStatus: matched ? 'matched' : 'manual',
+              statementPeriod: period,
+              coversYear,
+            };
+          }));
+
         } catch(e) {
-          log.push(`\n✗ Unexpected error: ${e.message}`);
+          log.push(`\n✗ Error: ${e.message}`);
         }
 
         setMatchLog([...log]);
@@ -1655,7 +1961,7 @@ Return JSON array only (no markdown, no explanation):
           const names = new Set(prev.map(f => f.name));
           return [...prev, ...valid.filter(f => !names.has(f.name))];
         });
-        setMatchDone(false); // reset so Start matching shows again
+        setMatchDone(false);
       }
 
       function updateRow(id, field, val) {
@@ -1674,6 +1980,7 @@ Return JSON array only (no markdown, no explanation):
       const matched = rows.filter(r => r.matchStatus === 'matched').length;
       const manual  = rows.filter(r => r.matchStatus === 'manual').length;
       const pending = rows.filter(r => r.matchStatus === 'pending').length;
+      const outsideYear = rows.filter(r => r.matchStatus === 'matched' && r.coversYear === false).length;
 
       return (
         <div className="review-main">
@@ -1681,14 +1988,19 @@ Return JSON array only (no markdown, no explanation):
           <div className="top-row">
             <div>
               <div className="page-title">Match {taxYear} statements</div>
-              <div className="page-sub">Drop statement files, then click Start matching. Edit any value directly in the table.</div>
+              <div className="page-sub">Drop statement files, then click Start matching. Gemini will extract balances from all files at once.</div>
             </div>
             <div className="stat-row">
               {matched > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--green-text)'}}>{matched}</div><div className="stat-label">matched</div></div>}
+              {outsideYear > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--amber-text)'}}>{outsideYear}</div><div className="stat-label">wrong year</div></div>}
               {manual > 0  && <div className="stat"><div className="stat-val" style={{color:'var(--amber-text)'}}>{manual}</div><div className="stat-label">manual</div></div>}
               {pending > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--text3)'}}>{pending}</div><div className="stat-label">pending</div></div>}
             </div>
           </div>
+
+          {!geminiKey && (
+            <div className="demo-banner">No Gemini API key — go back to Setup and add one to enable matching.</div>
+          )}
 
           <div style={{display:'flex', gap:10, marginBottom:16, alignItems:'flex-start'}}>
             <div style={{flex:1, border:`0.5px dashed var(--border2)`, borderRadius:'var(--radius)', padding:'14px 18px',
@@ -1704,11 +2016,11 @@ Return JSON array only (no markdown, no explanation):
               ) : (
                 <div>
                   <div style={{fontSize:13, color:'var(--text2)', marginBottom:3}}>Drop statement files here, or click to browse</div>
-                  <div style={{fontSize:12, color:'var(--text3)'}}>PDF · XLS · XLSX · CSV</div>
+                  <div style={{fontSize:12, color:'var(--text3)'}}>PDF · XLS · XLSX · CSV — all files sent to Gemini together</div>
                 </div>
               )}
             </div>
-            {stmtFiles.length > 0 && !matching && (
+            {stmtFiles.length > 0 && !matching && geminiKey && (
               <button className="btn-primary" style={{whiteSpace:'nowrap', alignSelf:'center'}} onClick={runMatch}>
                 {matchDone ? 'Re-match' : 'Start matching'}
               </button>
@@ -1720,7 +2032,6 @@ Return JSON array only (no markdown, no explanation):
           <input ref={stmtRef} type="file" accept=".pdf,.xls,.xlsx,.csv" multiple style={{display:'none'}}
             onChange={e => addFiles(Array.from(e.target.files))}/>
 
-
           <div className="tbl-outer">
             <table>
               <thead>
@@ -1730,7 +2041,7 @@ Return JSON array only (no markdown, no explanation):
                   <th rowSpan={2}>Type</th>
                   <th colSpan={2} className="prior">{priorYear} prior</th>
                   <th className="new-grp">{taxYear} max (USD)</th>
-                  <th rowSpan={2}>Source</th>
+                  <th rowSpan={2}>Statement period</th>
                 </tr>
                 <tr>
                   <th className="sub-prior">Max</th>
@@ -1740,7 +2051,7 @@ Return JSON array only (no markdown, no explanation):
               </thead>
               <tbody>
                 {rows.map(r => (
-                  <tr key={r.id} className={r.matchStatus === 'matched' ? '' : r.matchStatus === 'manual' ? 'row-review' : ''}>
+                  <tr key={r.id} className={r.matchStatus === 'matched' ? (r.coversYear === false ? 'row-review' : '') : r.matchStatus === 'manual' ? 'row-review' : ''}>
                     <td>
                       <div style={{fontWeight:500, fontSize:13}}>{r.name}</div>
                     </td>
@@ -1755,12 +2066,15 @@ Return JSON array only (no markdown, no explanation):
                         style={r.matchStatus==='matched' ? {color:'var(--green-text)', fontWeight:500} : {}}
                         onChange={e => updateRow(r.id, 'newMax', e.target.value)}/>
                     </td>
-                    <td>
-                      {r.matchFile
-                        ? <span className="chip" title={r.matchFile}>{r.matchFile.slice(0,22)}{r.matchFile.length > 22 ? '…' : ''}</span>
+                    <td style={{fontSize:11}}>
+                      {r.statementPeriod
+                        ? <span>
+                            {r.statementPeriod}
+                            {r.coversYear === false && <span className="pill pill-amber" style={{marginLeft:6}}>⚠ wrong year</span>}
+                          </span>
                         : r.matchStatus === 'manual'
-                        ? <span style={{fontSize:11, color:'var(--amber-text)'}}>manual</span>
-                        : <span style={{color:'var(--text3)', fontSize:11}}>—</span>}
+                        ? <span style={{color:'var(--amber-text)'}}>enter manually</span>
+                        : <span style={{color:'var(--text3)'}}>—</span>}
                     </td>
                   </tr>
                 ))}
@@ -1770,8 +2084,8 @@ Return JSON array only (no markdown, no explanation):
 
           {matchDone && (
             <div style={{marginTop:12, padding:'10px 14px', background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:'var(--radius)'}}>
-              <div style={{fontSize:11, fontWeight:500, color:'var(--text3)', marginBottom:6}}>Matching log</div>
-              <pre style={{fontSize:11, color:'var(--text2)', lineHeight:1.7, whiteSpace:'pre-wrap', maxHeight:200, overflowY:'auto'}}>{matchLog.join('\n')}</pre>
+              <div style={{fontSize:11, fontWeight:500, color:'var(--text3)', marginBottom:6}}>Gemini matching log</div>
+              <pre style={{fontSize:11, color:'var(--text2)', lineHeight:1.7, whiteSpace:'pre-wrap', maxHeight:240, overflowY:'auto'}}>{matchLog.join('\n')}</pre>
             </div>
           )}
 
@@ -2415,6 +2729,14 @@ Return JSON array only (no markdown, no explanation):
       const [priorFbarFile, setPriorFbarFile] = useState(null);
       const [accounts, setAccounts] = useState([]);
       const [fxRate, setFxRate] = useState(83.97);
+      const [geminiKey, setGeminiKey] = useState(() => sessionStorage.getItem('fbar_gemini_key') || '');
+      const [driveToken, setDriveToken] = useState('');
+
+      // persist geminiKey to sessionStorage (not localStorage — session only for security)
+      useEffect(() => {
+        if (geminiKey) sessionStorage.setItem('fbar_gemini_key', geminiKey);
+        else sessionStorage.removeItem('fbar_gemini_key');
+      }, [geminiKey]);
 
       // Helpers: File ↔ sessionStorage (base64)
       async function fileToSession(file) {
@@ -2480,7 +2802,10 @@ Return JSON array only (no markdown, no explanation):
             <SetupScreen
               credentials={credentials} setCredentials={setCredentials}
               priorFbarFile={priorFbarFile} setPriorFbarFile={setPriorFbarFile}
-              taxYear={taxYear} onNext={navigate}
+              taxYear={taxYear}
+              geminiKey={geminiKey} setGeminiKey={setGeminiKey}
+              driveToken={driveToken} setDriveToken={setDriveToken}
+              onNext={navigate}
             />
           )}
           {step === 'accounts' && (
@@ -2490,6 +2815,8 @@ Return JSON array only (no markdown, no explanation):
               initialAccounts={accounts}
               setFinalAccounts={setAccounts}
               setFxRate={setFxRate}
+              geminiKey={geminiKey}
+              driveToken={driveToken}
               onNext={navigate}
               onBack={goBack}
             />
@@ -2500,6 +2827,7 @@ Return JSON array only (no markdown, no explanation):
               accounts={accounts}
               setAccounts={setAccounts}
               fxRate={fxRate}
+              geminiKey={geminiKey}
               onNext={navigate}
               onBack={goBack}
             />
