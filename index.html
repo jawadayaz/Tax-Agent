@@ -196,7 +196,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const APP_VERSION = 'v1.10';
+    const APP_VERSION = 'v1.11';
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -1261,11 +1261,9 @@ Return JSON array only (no markdown, no explanation):
     // ─── SetupScreen ──────────────────────────────────────────────────────────
     function SetupScreen({ credentials, setCredentials,
                            priorFbarFile, setPriorFbarFile,
-                           taxYear, geminiKey, setGeminiKey,
-                           driveToken, setDriveToken, onNext }) {
+                           taxYear, driveToken, setDriveToken, onNext }) {
       const fileRef = useRef();
       const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem('google_client_id') || '');
-      const [keyVisible, setKeyVisible] = useState(false);
       const [connectingDrive, setConnectingDrive] = useState(false);
       const [driveConnected, setDriveConnected] = useState(!!driveToken);
       const isFileOrigin = window.location.protocol === 'file:';
@@ -1283,10 +1281,7 @@ Return JSON array only (no markdown, no explanation):
             scope: 'https://www.googleapis.com/auth/drive.readonly',
             callback: (resp) => {
               setConnectingDrive(false);
-              if (resp.access_token) {
-                setDriveToken(resp.access_token);
-                setDriveConnected(true);
-              }
+              if (resp.access_token) { setDriveToken(resp.access_token); setDriveConnected(true); }
             },
             error_callback: () => setConnectingDrive(false),
           });
@@ -1295,33 +1290,11 @@ Return JSON array only (no markdown, no explanation):
       }
 
       const canProceed = credentials.pan.length >= 10 && credentials.dob && credentials.fullName.length >= 2;
-      const keyMasked = geminiKey ? (keyVisible ? geminiKey : '···' + geminiKey.slice(-4)) : '';
 
       return (
         <div className="main">
           <div className="page-title">Set up {taxYear} FBAR</div>
-          <div className="page-sub">Upload your prior FBAR if you have one, enter your details, and add a Gemini API key to enable AI-powered statement matching.</div>
-
-          <div className="section-label">Gemini API key</div>
-          <div style={{marginBottom:16}}>
-            <div style={{display:'flex', gap:8, alignItems:'center'}}>
-              {geminiKey ? (
-                <>
-                  <span style={{fontSize:13, color:'var(--green-text)', fontWeight:500}}>✓ Key set</span>
-                  <span style={{fontSize:12, color:'var(--text3)', fontFamily:'monospace'}}>{keyMasked}</span>
-                  <button className="btn-ghost" style={{fontSize:11, padding:'3px 8px'}} onClick={() => setKeyVisible(v => !v)}>{keyVisible ? 'hide' : 'show'}</button>
-                  <button className="btn-ghost" style={{fontSize:11, padding:'3px 8px'}} onClick={() => setGeminiKey('')}>remove</button>
-                </>
-              ) : (
-                <input type="password" placeholder="AIza…"
-                  style={{maxWidth:340}}
-                  onChange={e => setGeminiKey(e.target.value.trim())}/>
-              )}
-            </div>
-            <div className="field-hint">Needed for AI account discovery and statement matching. Get a free key at aistudio.google.com.</div>
-          </div>
-
-          <hr className="divider"/>
+          <div className="page-sub">Upload your prior FBAR if you have one, then enter your details. AI-powered matching and account discovery runs via the server — no API key needed in the browser.</div>
 
           <div className="section-label">Prior year FBAR ({taxYear - 1}) — optional</div>
           <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:4}}>
@@ -1407,7 +1380,7 @@ Return JSON array only (no markdown, no explanation):
     }
 
     // ─── AccountsScreen ───────────────────────────────────────────────────────
-    function AccountsScreen({ taxYear, priorFbarFile, initialAccounts, setFinalAccounts, setFxRate, geminiKey, driveToken, onNext, onBack }) {
+    function AccountsScreen({ taxYear, priorFbarFile, initialAccounts, setFinalAccounts, setFxRate, driveToken, onNext, onBack }) {
       const priorYear = taxYear - 1;
       const [loading, setLoading] = useState(initialAccounts.length === 0);
       const [error, setError]   = useState(null);
@@ -1502,32 +1475,18 @@ Return JSON array only (no markdown, no explanation):
         return toAdd.length;
       }
 
-      // Extract account list from text using Gemini
+      // Extract account list from text via worker /api/discover
       async function geminiExtractAccounts(text) {
-        const prompt = `From the following text, extract all Indian financial accounts held by a US person for FBAR reporting.
-Include: bank accounts, brokerage/demat accounts, mutual fund folios, AIF/PMS accounts.
-Exclude: individual stocks, ETF names, fund scheme names, CAMS/KFintech/NSDL/CDSL (these are platforms not account holders).
-Return ONLY a JSON array (no markdown):
-[{"name": "institution name as written", "type": "bank|brokerage|mf|other", "number": "****XXXX or null"}]
-If you find a comma-separated list of names, treat each as a separate account with type "other".
-Text:
-${text.slice(0, 20000)}`;
-        const resp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
-          {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({
-              contents: [{parts:[{text: prompt}]}],
-              generationConfig: {responseMimeType:'application/json'}
-            })
-          }
-        );
-        if (!resp.ok) throw new Error(`Gemini ${resp.status}: ${(await resp.text()).slice(0,200)}`);
-        const data = await resp.json();
-        const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!raw) throw new Error('Empty Gemini response');
-        return JSON.parse(raw);
+        const resp = await fetch(`${WORKER_URL}/api/discover`, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ text }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.error || `Worker error ${resp.status}`);
+        }
+        return resp.json();
       }
 
       // Extract Google Doc/Sheets ID from URL
@@ -1563,7 +1522,6 @@ ${text.slice(0, 20000)}`;
 
       async function runDiscovery() {
         if (discovering) return;
-        if (!geminiKey) { setDiscoverLog('✗ Add a Gemini API key in Setup first.'); return; }
         setDiscovering(true);
         setDiscoverLog('');
         try {
@@ -1767,11 +1725,10 @@ ${text.slice(0, 20000)}`;
 
               <div style={{display:'flex', alignItems:'center', gap:10, marginTop:12}}>
                 <button className="btn-secondary" style={{fontSize:12}}
-                  disabled={discovering || !geminiKey}
+                  disabled={discovering}
                   onClick={runDiscovery}>
                   {discovering ? <span><span className="spinner">↻</span> Finding accounts…</span> : 'Find accounts'}
                 </button>
-                {!geminiKey && <span style={{fontSize:11, color:'var(--text3)'}}>Add Gemini key in Setup to enable</span>}
                 {discoverLog && <span style={{fontSize:12, color: discoverLog.startsWith('✗') ? 'var(--red-text)' : discoverLog.startsWith('✓') ? 'var(--green-text)' : 'var(--text2)'}}>{discoverLog}</span>}
               </div>
             </div>
@@ -1787,19 +1744,23 @@ ${text.slice(0, 20000)}`;
     }
 
     // ─── MatchScreen ──────────────────────────────────────────────────────────
-    function MatchScreen({ taxYear, accounts, setAccounts, fxRate, geminiKey, onNext, onBack }) {
+    function MatchScreen({ taxYear, accounts, setAccounts, fxRate, onNext, onBack }) {
       const priorYear = taxYear - 1;
       const [stmtFiles, setStmtFiles] = useState([]);
       const [matching, setMatching]   = useState(false);
       const [matchDone, setMatchDone] = useState(false);
       const [matchLog, setMatchLog]   = useState([]);
       const [rows, setRows]           = useState(() =>
-        accounts.filter(a => a.include).map(a => ({...a, matchStatus: 'pending', matchFile: null, statementPeriod: null, coversYear: true}))
+        accounts.filter(a => a.include).map(a => ({
+          ...a, matchStatus: 'pending', matchFile: null,
+          statementPeriod: null, coversYear: true, textSnippet: '',
+        }))
       );
-      const stmtRef = useRef();
-      const runningRef = useRef(false);
-      const stmtFilesRef = useRef(stmtFiles);
-      const rowsSnapRef  = useRef(rows);
+      const stmtRef        = useRef();
+      const runningRef     = useRef(false);
+      const feedbackTimers = useRef({});
+      const stmtFilesRef   = useRef(stmtFiles);
+      const rowsSnapRef    = useRef(rows);
       useEffect(() => { stmtFilesRef.current = stmtFiles; }, [stmtFiles]);
       useEffect(() => { rowsSnapRef.current  = rows; },      [rows]);
 
@@ -1819,16 +1780,12 @@ ${text.slice(0, 20000)}`;
           setMatchLog(['✗ No accounts — go back to Accounts.']);
           setMatchDone(true); runningRef.current = false; return;
         }
-        if (!geminiKey) {
-          setMatchLog(['✗ No Gemini API key — add one in Setup.']);
-          setMatchDone(true); runningRef.current = false; return;
-        }
 
         setMatching(true);
         setMatchDone(false);
 
         try {
-          // Step 1: extract text from every file
+          // Step 1: extract text from every file locally
           log.push(`Extracting text from ${files.length} file(s)…`);
           setMatchLog([...log]);
 
@@ -1836,7 +1793,7 @@ ${text.slice(0, 20000)}`;
           for (const file of files) {
             try {
               const text = await extractTextFromFile(file);
-              fileTexts.push({ file, text });
+              fileTexts.push({ filename: file.name, text });
               log.push(`  ✓ ${file.name}  (${text.length.toLocaleString()} chars)`);
             } catch(e) {
               log.push(`  ✗ ${file.name}: ${e.message}`);
@@ -1850,92 +1807,54 @@ ${text.slice(0, 20000)}`;
             runningRef.current = false; return;
           }
 
-          // Step 2: build single Gemini prompt with all accounts + all file texts
-          const accountList = currentRows.map((r, i) => `${i+1}. ${r.name}`).join('\n');
-          const statementsBlock = fileTexts.map(({file, text}) =>
-            `\n=== FILE: ${file.name} ===\n${text.slice(0, 80000)}`
-          ).join('\n');
-
-          const prompt = `You are analyzing financial statements for FBAR (FinCEN 114) filing for US tax year ${taxYear}.
-
-For each account listed below, search ALL provided statements and return one JSON object with:
-- "matched": true if found in any statement, false otherwise
-- "peak_balance_inr": HIGHEST balance in INR across ALL statements for this account (integer, 0 if not found).
-  CRITICAL: Use NAV / current value / portfolio value / market value.
-  Do NOT use: committed capital / invested amount / cost basis / total commitment.
-- "statement_period": period covered e.g. "Apr 2024 – Mar 2025" or "Jan–Dec 2024" (null if not found)
-- "covers_tax_year": true if the statement covers any part of ${taxYear}, false if it only covers a different year
-- "notes": one-line note e.g. "Pre-tax NAV ₹2.72Cr used across 2 files" or "Statement is FY2023-24 only"
-
-If an account appears in multiple statements, combine them — use the highest peak_balance_inr found.
-
-Accounts to find (return exactly one JSON object per account, in the SAME ORDER):
-${accountList}
-
-Return ONLY a JSON array. No markdown, no explanation.
-
-${statementsBlock}`;
-
-          log.push(`\nSending to Gemini (${currentRows.length} accounts, ${fileTexts.length} files)…`);
+          // Step 2: send all texts + account names to worker /api/extract
+          log.push(`\nSending to extraction service (${currentRows.length} accounts, ${fileTexts.length} files)…`);
           setMatchLog([...log]);
 
-          const resp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
-            {
-              method: 'POST',
-              headers: {'Content-Type':'application/json'},
-              body: JSON.stringify({
-                contents: [{parts:[{text: prompt}]}],
-                generationConfig: {responseMimeType:'application/json'},
-              })
-            }
-          );
+          const resp = await fetch(`${WORKER_URL}/api/extract`, {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+              texts: fileTexts,
+              accounts: currentRows.map(r => r.name),
+              taxYear,
+            }),
+          });
 
           if (!resp.ok) {
-            const err = await resp.text();
-            throw new Error(`Gemini ${resp.status}: ${err.slice(0,300)}`);
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || `Worker error ${resp.status}`);
           }
 
-          const data = await resp.json();
-          const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!raw) throw new Error('Empty Gemini response');
+          const results = await resp.json();
+          if (!Array.isArray(results)) throw new Error('Unexpected response format from worker');
 
-          let results;
-          try { results = JSON.parse(raw); }
-          catch(e) { throw new Error('Could not parse Gemini response as JSON: ' + raw.slice(0,200)); }
+          log.push(`\nResults (${results.length}):`);
 
-          if (!Array.isArray(results)) throw new Error('Gemini did not return an array');
-
-          log.push(`\nGemini returned ${results.length} result(s):`);
-
-          // Step 3: apply results to rows
+          // Step 3: apply results — never overwrite FBAR name/number
           setRows(prev => prev.map((r, i) => {
             const res = results[i];
             if (!res) return r;
-            const matched = res.matched && res.peak_balance_inr > 0;
-            const newMax = matched ? Math.round(res.peak_balance_inr / fxRate) : null;
-            const period = res.statement_period || null;
-            const coversYear = res.covers_tax_year !== false; // default true if missing
-            const note = res.notes || '';
+            const matched    = res.matched && (res.peak_balance_inr || 0) > 0;
+            const newMax     = matched ? Math.round(res.peak_balance_inr / fxRate) : null;
+            const period     = res.statement_period || null;
+            const coversYear = res.covers_tax_year !== false;
+            const snippet    = res.text_snippet || '';
 
             if (matched) {
               log.push(`  ✓ ${r.name}`);
-              log.push(`     ₹${res.peak_balance_inr.toLocaleString('en-IN')} → ${fmtUSD(newMax)}`);
+              log.push(`     ₹${(res.peak_balance_inr||0).toLocaleString('en-IN')} → ${fmtUSD(newMax)}`);
               if (period) log.push(`     period: ${period}${!coversYear ? '  ⚠ OUTSIDE TAX YEAR' : ''}`);
-              if (note) log.push(`     note: ${note}`);
+              if (res.notes) log.push(`     ${res.notes}`);
             } else {
-              log.push(`  · ${r.name} — not found`);
-              if (note) log.push(`     ${note}`);
+              log.push(`  · ${r.name} — not found${res.notes ? ': ' + res.notes : ''}`);
             }
 
             return {
-              ...r,
-              newMax,
-              newYearEnd: newMax,
-              matchFile: matched ? fileTexts.map(ft => ft.file.name).join(', ').slice(0, 40) : null,
+              ...r, newMax, newYearEnd: newMax,
+              matchFile: matched ? fileTexts.map(ft => ft.filename).join(', ').slice(0,40) : null,
               matchStatus: matched ? 'matched' : 'manual',
-              statementPeriod: period,
-              coversYear,
+              statementPeriod: period, coversYear, textSnippet: snippet,
             };
           }));
 
@@ -1966,10 +1885,35 @@ ${statementsBlock}`;
 
       function updateRow(id, field, val) {
         const num = parseFloat(val.replace(/[^0-9.]/g,''));
-        setRows(prev => prev.map(r => r.id === id
-          ? {...r, [field]: isNaN(num) ? null : num,
-              matchStatus: r.matchStatus === 'matched' ? 'matched' : 'manual'}
-          : r));
+        setRows(prev => prev.map(r => {
+          if (r.id !== id) return r;
+          const updated = {...r, [field]: isNaN(num) ? null : num,
+            matchStatus: r.matchStatus === 'matched' ? 'matched' : 'manual'};
+
+          // Send correction feedback if user changed a matched balance by >5%
+          if (field === 'newMax' && r.matchStatus === 'matched' && !isNaN(num)) {
+            const extractedInr = Math.round((r.newMax || 0) * fxRate);
+            const correctedInr = Math.round(num * fxRate);
+            const diff = Math.abs(extractedInr - correctedInr) / Math.max(correctedInr, 1);
+            if (diff > 0.05 && correctedInr > 0) {
+              clearTimeout(feedbackTimers.current[id]);
+              feedbackTimers.current[id] = setTimeout(() => {
+                fetch(`${WORKER_URL}/api/feedback`, {
+                  method: 'POST',
+                  headers: {'Content-Type':'application/json'},
+                  body: JSON.stringify({
+                    institution: r.name,
+                    text_snippet: r.textSnippet || '',
+                    extracted_inr: extractedInr,
+                    corrected_inr: correctedInr,
+                    notes: `User corrected in match screen (${taxYear} FBAR)`,
+                  }),
+                }).catch(() => {}); // fire-and-forget
+              }, 1500);
+            }
+          }
+          return updated;
+        }));
       }
 
       function proceed() {
@@ -1977,9 +1921,9 @@ ${statementsBlock}`;
         onNext();
       }
 
-      const matched = rows.filter(r => r.matchStatus === 'matched').length;
-      const manual  = rows.filter(r => r.matchStatus === 'manual').length;
-      const pending = rows.filter(r => r.matchStatus === 'pending').length;
+      const matched     = rows.filter(r => r.matchStatus === 'matched').length;
+      const manual      = rows.filter(r => r.matchStatus === 'manual').length;
+      const pending     = rows.filter(r => r.matchStatus === 'pending').length;
       const outsideYear = rows.filter(r => r.matchStatus === 'matched' && r.coversYear === false).length;
 
       return (
@@ -1997,10 +1941,6 @@ ${statementsBlock}`;
               {pending > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--text3)'}}>{pending}</div><div className="stat-label">pending</div></div>}
             </div>
           </div>
-
-          {!geminiKey && (
-            <div className="demo-banner">No Gemini API key — go back to Setup and add one to enable matching.</div>
-          )}
 
           <div style={{display:'flex', gap:10, marginBottom:16, alignItems:'flex-start'}}>
             <div style={{flex:1, border:`0.5px dashed var(--border2)`, borderRadius:'var(--radius)', padding:'14px 18px',
@@ -2020,7 +1960,7 @@ ${statementsBlock}`;
                 </div>
               )}
             </div>
-            {stmtFiles.length > 0 && !matching && geminiKey && (
+            {stmtFiles.length > 0 && !matching && (
               <button className="btn-primary" style={{whiteSpace:'nowrap', alignSelf:'center'}} onClick={runMatch}>
                 {matchDone ? 'Re-match' : 'Start matching'}
               </button>
@@ -2729,14 +2669,7 @@ ${statementsBlock}`;
       const [priorFbarFile, setPriorFbarFile] = useState(null);
       const [accounts, setAccounts] = useState([]);
       const [fxRate, setFxRate] = useState(83.97);
-      const [geminiKey, setGeminiKey] = useState(() => sessionStorage.getItem('fbar_gemini_key') || '');
       const [driveToken, setDriveToken] = useState('');
-
-      // persist geminiKey to sessionStorage (not localStorage — session only for security)
-      useEffect(() => {
-        if (geminiKey) sessionStorage.setItem('fbar_gemini_key', geminiKey);
-        else sessionStorage.removeItem('fbar_gemini_key');
-      }, [geminiKey]);
 
       // Helpers: File ↔ sessionStorage (base64)
       async function fileToSession(file) {
@@ -2803,7 +2736,6 @@ ${statementsBlock}`;
               credentials={credentials} setCredentials={setCredentials}
               priorFbarFile={priorFbarFile} setPriorFbarFile={setPriorFbarFile}
               taxYear={taxYear}
-              geminiKey={geminiKey} setGeminiKey={setGeminiKey}
               driveToken={driveToken} setDriveToken={setDriveToken}
               onNext={navigate}
             />
@@ -2815,7 +2747,6 @@ ${statementsBlock}`;
               initialAccounts={accounts}
               setFinalAccounts={setAccounts}
               setFxRate={setFxRate}
-              geminiKey={geminiKey}
               driveToken={driveToken}
               onNext={navigate}
               onBack={goBack}
@@ -2827,7 +2758,6 @@ ${statementsBlock}`;
               accounts={accounts}
               setAccounts={setAccounts}
               fxRate={fxRate}
-              geminiKey={geminiKey}
               onNext={navigate}
               onBack={goBack}
             />
