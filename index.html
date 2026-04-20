@@ -196,7 +196,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const APP_VERSION = 'v1.08';
+    const APP_VERSION = 'v1.09';
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -427,6 +427,7 @@
         if (score > bestScore) { bestScore = score; bestPos = i; }
       }
 
+      const bestHits = Math.round(bestScore * words.length);
       if (bestScore < 0.3) return null;
 
       // Expand around best window for richer context
@@ -467,7 +468,7 @@
         if (found.length > 0) yearEndBalance = found[0];
       }
 
-      return { score: bestScore, institutionName, accountNumber, peakBalance, yearEndBalance };
+      return { score: bestScore, _hits: bestHits, institutionName, accountNumber, peakBalance, yearEndBalance };
     }
 
     // ─── Gmail scan queries ────────────────────────────────────────────────────
@@ -1587,8 +1588,11 @@ Return JSON array only (no markdown, no explanation):
           for (const row of currentRows) {
             log.push(`\n[${row.name}]`);
 
-            // Collect ALL files that match this account (score >= 0.3)
-            // so we can take the highest balance found across all of them.
+            // Collect ALL files that confidently match this account.
+            // Threshold 0.5 + at least 2 word hits to avoid false positives from
+            // common financial terms (e.g. "securities", "bank") appearing in unrelated docs.
+            const MATCH_THRESHOLD = 0.5;
+            const MATCH_MIN_HITS  = 2;
             const allMatches = [];
             let topScoringResult = null;
             let topScoringFile   = null;
@@ -1596,8 +1600,10 @@ Return JSON array only (no markdown, no explanation):
             for (const { file, text } of fileTexts) {
               const result = findAccountInText(row.name, text);
               const score  = result?.score ?? 0;
-              log.push(`  ${score >= 0.3 ? '✓' : '·'} ${file.name}  score ${score.toFixed(2)}`);
-              if (result && score >= 0.3) {
+              const hits   = result?._hits ?? 0;
+              const ok     = score >= MATCH_THRESHOLD && hits >= MATCH_MIN_HITS;
+              log.push(`  ${ok ? '✓' : '·'} ${file.name}  score ${score.toFixed(2)}  hits ${hits}`);
+              if (ok) {
                 allMatches.push({ result, file });
                 if (score > (topScoringResult?.score ?? 0)) {
                   topScoringResult = result;
@@ -1607,26 +1613,21 @@ Return JSON array only (no markdown, no explanation):
             }
 
             if (allMatches.length > 0) {
-              // Max peak balance across all matching files
+              // Max peak balance across all matching files.
+              // Never overwrite name/number — those come from the FBAR and are correct.
               const maxPeak    = Math.max(...allMatches.map(m => m.result.peakBalance));
               const maxYearEnd = Math.max(...allMatches.map(m => m.result.yearEndBalance));
               const sourceFiles = allMatches.map(m => m.file.name).join(', ');
               setRows(prev => prev.map(r => r.id === row.id ? {
                 ...r,
-                name:        topScoringResult.institutionName,
-                number:      topScoringResult.accountNumber || r.number,
                 newMax:      Math.round(maxPeak    / fxRate),
                 newYearEnd:  Math.round(maxYearEnd / fxRate),
                 matchFile:   allMatches.length === 1 ? topScoringFile.name : `${allMatches.length} files`,
                 matchStatus: 'matched',
               } : r));
               log.push(`  → matched across ${allMatches.length} file(s): ${sourceFiles}`);
-              log.push(`     name: ${topScoringResult.institutionName}  acct: ${topScoringResult.accountNumber || '—'}`);
               log.push(`     peak ₹${maxPeak.toLocaleString('en-IN')}  → ${fmtUSD(Math.round(maxPeak/fxRate))} max`);
             } else {
-              const maxScore = allMatches.length === 0
-                ? Math.max(...fileTexts.map(ft => findAccountInText(row.name, ft.text)?.score ?? 0))
-                : 0;
               setRows(prev => prev.map(r => r.id === row.id ? {...r, matchStatus: 'manual'} : r));
               log.push(`  → not found — enter manually`);
             }
