@@ -196,7 +196,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const APP_VERSION = 'v1.11';
+    const APP_VERSION = 'v1.12';
     const WORKER_URL = 'https://tax-agent-worker.jawadayaz.workers.dev';
     const { useState, useEffect, useRef, useCallback } = React;
 
@@ -278,29 +278,87 @@
     })();
 
     // Extract all text from a file (PDF, XLS/XLSX, CSV)
+    // ── Unified file text extractor ───────────────────────────────────────────
+    // Handles CSV, XLS/XLSX, and PDF (XFA or standard).
+    // XFA PDFs (e.g. FinCEN FBAR) return the decompressed XML text.
+    // Standard PDFs return PDF.js-extracted text with Indian number fix applied.
     async function extractTextFromFile(file) {
       const name = file.name.toLowerCase();
 
-      if (name.endsWith('.csv')) {
-        return file.text();
-      }
+      if (name.endsWith('.csv')) return file.text();
 
       if (name.endsWith('.xls') || name.endsWith('.xlsx')) {
         const buf = await file.arrayBuffer();
         const wb = XLSX.read(buf, { type: 'array' });
-        return wb.SheetNames
-          .map(s => XLSX.utils.sheet_to_csv(wb.Sheets[s]))
-          .join('\n');
+        return wb.SheetNames.map(s => XLSX.utils.sheet_to_csv(wb.Sheets[s])).join('\n');
       }
 
-      // PDF via PDF.js
+      // PDF — try XFA first, fall back to PDF.js
       const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+
+      // ── XFA stream extraction ──────────────────────────────────────────────
+      async function tryDecompress(chunk) {
+        const attempts = [['deflate', chunk], ['deflate-raw', chunk]];
+        if (chunk.length > 2 && chunk[0] === 0x78) attempts.push(['deflate-raw', chunk.slice(2)]);
+        for (const [fmt, data] of attempts) {
+          try {
+            const inputStream = new ReadableStream({ start(c) { c.enqueue(data); c.close(); } });
+            const reader = inputStream.pipeThrough(new DecompressionStream(fmt)).getReader();
+            const parts = [];
+            while (true) { const { done, value } = await reader.read(); if (done) break; parts.push(value); }
+            const out = new Uint8Array(parts.reduce((a, b) => a + b.length, 0));
+            let off = 0; parts.forEach(p => { out.set(p, off); off += p.length; });
+            return new TextDecoder('utf-8', { fatal: false }).decode(out);
+          } catch(_) {}
+        }
+        return null;
+      }
+
+      function matchAt(arr, pos, marker) {
+        if (pos + marker.length > arr.length) return false;
+        for (let k = 0; k < marker.length; k++) if (arr[pos+k] !== marker[k]) return false;
+        return true;
+      }
+
+      const SM1 = [115,116,114,101,97,109,10];
+      const SM2 = [115,116,114,101,97,109,13,10];
+      const EM  = [101,110,100,115,116,114,101,97,109];
+      const chunks = [];
+      for (let i = 0; i < bytes.length - 10; i++) {
+        if (bytes[i] !== 115) continue;
+        let skip = 0;
+        if (matchAt(bytes, i, SM1)) skip = SM1.length;
+        else if (matchAt(bytes, i, SM2)) skip = SM2.length;
+        if (skip === 0) continue;
+        const start = i + skip;
+        let end = -1;
+        for (let j = start; j < bytes.length - 9; j++) {
+          if (bytes[j] === 101 && matchAt(bytes, j, EM)) { end = j; break; }
+        }
+        if (end > start) {
+          let dataEnd = end;
+          if (dataEnd > start && bytes[dataEnd - 1] === 10) dataEnd--;
+          if (dataEnd > start && bytes[dataEnd - 1] === 13) dataEnd--;
+          chunks.push(bytes.slice(start, dataEnd));
+          i = end + EM.length - 1;
+        }
+      }
+
+      for (const chunk of chunks) {
+        const text = await tryDecompress(chunk);
+        if (text && text.includes('ffbar:BSAForm')) {
+          // XFA FBAR PDF — return normalised XML text for local account parsing
+          return text.replace(/\n>/g, '>');
+        }
+      }
+
+      // ── Standard PDF via PDF.js ────────────────────────────────────────────
       const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
       let text = '';
       for (let p = 1; p <= pdf.numPages; p++) {
         const page = await pdf.getPage(p);
         const content = await page.getTextContent();
-        // Preserve rough line structure
         let lastY = null;
         for (const item of content.items) {
           if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) text += '\n';
@@ -309,14 +367,80 @@
         }
         text += '\n';
       }
-      // Fix PDF.js splitting of Indian-format numbers across text items.
-      // e.g. "2,72,66,1 00" → "2,72,66,100"  or  "3,00,00 ,000" → "3,00,00,000"
+      // Fix PDF.js splitting of Indian-format numbers across text items
       text = text
-        // Case: last group split mid-way, e.g. "2,72,66,1 00" → "2,72,66,100"
         .replace(/(\d{1,3}(?:,\d{2})*,\d{1,2})[ \t]+(\d{1,2})(?!\d)/g, '$1$2')
-        // Case: trailing 3-digit group separated by space, e.g. "3,00,00 000" → "3,00,00,000"
         .replace(/(\d{1,3}(?:,\d{2})*)[ \t]+(\d{3})(?!\d)/g, '$1,$2');
       return text;
+    }
+
+    // Parse FBAR account objects from XFA XML text (FinCEN BSA format)
+    function tryParseXFAAccounts(text) {
+      if (!text || !text.includes('ffbar:BSAForm')) return [];
+      const ns = 'http://www.fincen.gov/bsa/ffbar/2011-06-01';
+      const TYPE_MAP = { A: 'bank', B: 'brokerage', S: 'brokerage', M: 'mf', Z: 'other', C: 'other' };
+      const doc = new DOMParser().parseFromString(text, 'text/xml');
+
+      function xget(el, localName) {
+        const byNS = el.getElementsByTagNameNS(ns, localName);
+        if (byNS.length) return byNS[0].textContent?.trim() || '';
+        const byPfx = el.getElementsByTagName('ffbar:' + localName);
+        if (byPfx.length) return byPfx[0].textContent?.trim() || '';
+        const byBare = el.getElementsByTagName(localName);
+        if (byBare.length) return byBare[0].textContent?.trim() || '';
+        return '';
+      }
+
+      const accounts = [];
+      for (const tag of ['FinAcctOwnedSeparately', 'FinAcctOwnedJointly', 'FinAcctSigAuth']) {
+        const ownership = tag === 'FinAcctOwnedSeparately' ? 'sole'
+                        : tag === 'FinAcctOwnedJointly'    ? 'joint' : 'sigauth';
+        const els = doc.getElementsByTagNameNS(ns, tag).length
+          ? doc.getElementsByTagNameNS(ns, tag)
+          : doc.getElementsByTagName('ffbar:' + tag);
+        for (const el of els) {
+          const name = xget(el, 'FinInstName');
+          if (!name) continue;
+          const num    = xget(el, 'AccntNumber');
+          const typ    = xget(el, 'AccountType');
+          const maxv   = parseFloat(xget(el, 'MaximumAccntValue') || '0');
+          const digits = num.replace(/\D/g, '');
+          const last4  = digits.length >= 4 ? digits.slice(-4) : (digits || num.slice(-4));
+          let joint_owner = null;
+          if (ownership === 'joint') {
+            const nOwners = xget(el, 'NOofJointOwners');
+            const joEls = el.getElementsByTagNameNS(ns, 'PrincipalJointOwner').length
+              ? el.getElementsByTagNameNS(ns, 'PrincipalJointOwner')
+              : el.getElementsByTagName('ffbar:PrincipalJointOwner');
+            let ownerName = '';
+            if (joEls.length) {
+              const jo = joEls[0];
+              ownerName = [xget(jo, 'FirstName'), xget(jo, 'LastName')].filter(Boolean).join(' ');
+            }
+            joint_owner = ownerName || (nOwners ? `${nOwners} joint owner(s), name not on file` : null);
+          }
+          accounts.push({
+            institution_name: name,
+            account_number: last4 ? `****${last4}` : num || '????',
+            account_type: TYPE_MAP[typ] || 'other',
+            ownership, joint_owner,
+            max_value_usd: maxv, year_end_value_usd: maxv, currency: 'INR',
+          });
+        }
+      }
+      return accounts;
+    }
+
+    // Parse prior FBAR PDF → account list (local only, no AI)
+    async function parsePriorFBAR(file) {
+      const text = await extractTextFromFile(file);
+      const accounts = tryParseXFAAccounts(text);
+      if (accounts.length > 0) {
+        console.log(`[tax-agent] parsePriorFBAR: extracted ${accounts.length} accounts from XFA`);
+        return accounts;
+      }
+      console.warn('[tax-agent] parsePriorFBAR: no XFA accounts found');
+      return [];
     }
 
     // Parse INR amounts from text (handles Indian number format: 3,00,00,000)
@@ -661,187 +785,6 @@
         localStorage.setItem(`tax-agent-msgcache-${taxYear}`, JSON.stringify(cache));
         return cache;
       } catch { return existingCache || {}; }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Extract accounts directly from FinCEN XFA PDF (no AI needed)
-    async function extractXFAAccounts(file) {
-      const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-
-      // Decompress a Uint8Array using the browser Streams API
-      async function tryDecompress(chunk) {
-        // Build list of (format, data) attempts:
-        // 1. 'deflate' (zlib-wrapped) — standard PDF FlateDecode
-        // 2. 'deflate-raw' — raw deflate without zlib header
-        // 3. If chunk starts with zlib magic byte 0x78, strip the 2-byte zlib header and try deflate-raw
-        const attempts = [
-          ['deflate', chunk],
-          ['deflate-raw', chunk],
-        ];
-        if (chunk.length > 2 && chunk[0] === 0x78) {
-          attempts.push(['deflate-raw', chunk.slice(2)]);
-        }
-
-        const errors = [];
-        for (const [fmt, data] of attempts) {
-          try {
-            const inputStream = new ReadableStream({
-              start(c) { c.enqueue(data); c.close(); }
-            });
-            const reader = inputStream.pipeThrough(new DecompressionStream(fmt)).getReader();
-            const parts = [];
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              parts.push(value);
-            }
-            const out = new Uint8Array(parts.reduce((a, b) => a + b.length, 0));
-            let off = 0; parts.forEach(p => { out.set(p, off); off += p.length; });
-            return new TextDecoder('utf-8', { fatal: false }).decode(out);
-          } catch(e) {
-            errors.push(`${fmt}(${data === chunk ? 'raw' : 'strip2'}): ${e.message}`);
-          }
-        }
-        // errors suppressed — non-deflate streams (images, fonts) are expected
-        return null;
-      }
-
-      // Scan for stream...endstream blocks
-      function matchAt(arr, pos, marker) {
-        if (pos + marker.length > arr.length) return false;
-        for (let k = 0; k < marker.length; k++) if (arr[pos+k] !== marker[k]) return false;
-        return true;
-      }
-      // 'stream\n'   = [115,116,114,101,97,109,10]
-      // 'stream\r\n' = [115,116,114,101,97,109,13,10]
-      // 'endstream'  = [101,110,100,115,116,114,101,97,109]
-      const SM1 = [115,116,114,101,97,109,10];
-      const SM2 = [115,116,114,101,97,109,13,10];
-      const EM  = [101,110,100,115,116,114,101,97,109];
-
-      const chunks = [];
-      for (let i = 0; i < bytes.length - 10; i++) {
-        if (bytes[i] !== 115) continue; // fast pre-filter: 's'
-        let skip = 0;
-        if (matchAt(bytes, i, SM1)) skip = SM1.length;
-        else if (matchAt(bytes, i, SM2)) skip = SM2.length;
-        if (skip === 0) continue;
-        const start = i + skip;
-        let end = -1;
-        for (let j = start; j < bytes.length - 9; j++) {
-          if (bytes[j] === 101 && matchAt(bytes, j, EM)) { end = j; break; }
-        }
-        // Strip the mandatory \r\n or \n that the PDF spec requires before 'endstream'
-        // — that byte is NOT part of the compressed data and causes "junk after end" errors.
-        if (end > start) {
-          let dataEnd = end;
-          if (dataEnd > start && bytes[dataEnd - 1] === 10) dataEnd--;  // \n
-          if (dataEnd > start && bytes[dataEnd - 1] === 13) dataEnd--;  // \r
-          chunks.push(bytes.slice(start, dataEnd));
-          i = end + EM.length - 1;
-        }
-      }
-
-      // Try to extract accounts from a decompressed XML text.
-      // Returns array of accounts (possibly empty if this is the schema stream).
-      // FinCEN 114 AccountType codes (from BSA filing instructions):
-      // A = Bank/deposit account, B = Securities/brokerage account,
-      // S = Securities (alt), M = Mutual fund, Z = Other, C = Other
-      const TYPE_MAP = { A: 'bank', B: 'brokerage', S: 'brokerage', M: 'mf', Z: 'other', C: 'other' };
-      const ns = 'http://www.fincen.gov/bsa/ffbar/2011-06-01';
-
-      function xget(el, localName) {
-        const byNS = el.getElementsByTagNameNS(ns, localName);
-        if (byNS.length) return byNS[0].textContent?.trim() || '';
-        const byPfx = el.getElementsByTagName('ffbar:' + localName);
-        if (byPfx.length) return byPfx[0].textContent?.trim() || '';
-        const byBare = el.getElementsByTagName(localName);
-        if (byBare.length) return byBare[0].textContent?.trim() || '';
-        return '';
-      }
-
-      function tryExtractFromText(text) {
-        // Every tag in this PDF has a newline before >, e.g. <ffbar:FinInstName\n>value</ffbar:FinInstName\n>
-        // Strip ALL \n> → > so DOMParser sees valid XML.
-        const normalized = text.replace(/\n>/g, '>');
-        const doc = new DOMParser().parseFromString(normalized, 'text/xml');
-        const accounts = [];
-        for (const tag of ['FinAcctOwnedSeparately', 'FinAcctOwnedJointly', 'FinAcctSigAuth']) {
-          const ownership = tag === 'FinAcctOwnedSeparately' ? 'sole'
-                          : tag === 'FinAcctOwnedJointly'    ? 'joint' : 'sigauth';
-          const els = doc.getElementsByTagNameNS(ns, tag).length
-            ? doc.getElementsByTagNameNS(ns, tag)
-            : doc.getElementsByTagName('ffbar:' + tag);
-          for (const el of els) {
-            const name = xget(el, 'FinInstName');
-            if (!name) continue;
-            const num    = xget(el, 'AccntNumber');
-            const typ    = xget(el, 'AccountType');
-            const maxv   = parseFloat(xget(el, 'MaximumAccntValue') || '0');
-            const digits = num.replace(/\D/g, '');
-            const last4  = digits.length >= 4 ? digits.slice(-4) : (digits || num.slice(-4));
-            let joint_owner = null;
-            if (ownership === 'joint') {
-              const nOwners = xget(el, 'NOofJointOwners');
-              const joEls = el.getElementsByTagNameNS(ns, 'PrincipalJointOwner').length
-                ? el.getElementsByTagNameNS(ns, 'PrincipalJointOwner')
-                : el.getElementsByTagName('ffbar:PrincipalJointOwner');
-              let ownerName = '';
-              if (joEls.length) {
-                const jo = joEls[0];
-                ownerName = [xget(jo, 'FirstName'), xget(jo, 'LastName')].filter(Boolean).join(' ');
-              }
-              joint_owner = ownerName || (nOwners ? `${nOwners} joint owner(s), name not on file` : null);
-            }
-            accounts.push({
-              institution_name: name,
-              account_number: last4 ? `****${last4}` : num || '????',
-              account_type: TYPE_MAP[typ] || 'other',
-              ownership, joint_owner,
-              max_value_usd: maxv, year_end_value_usd: maxv, currency: 'INR',
-            });
-          }
-        }
-        return accounts;
-      }
-
-      // Scan all streams — try to parse every one that mentions the BSA form.
-      // Return accounts from the first stream that yields non-empty results.
-      // This avoids fragile schema-vs-data heuristics.
-      console.log(`[tax-agent] XFA: scanning ${chunks.length} streams`);
-      for (let si = 0; si < chunks.length; si++) {
-        const chunk = chunks[si];
-        const text = await tryDecompress(chunk);
-        if (!text) continue; // non-deflate stream (image/font/etc.) — ignore silently
-        if (!text.includes('ffbar:BSAForm')) continue;
-        const accounts = tryExtractFromText(text);
-        console.log(`[tax-agent] XFA: stream ${si} length ${text.length} → ${accounts.length} accounts`);
-        if (accounts.length > 0) return accounts;
-      }
-      console.log('[tax-agent] XFA: no accounts found in any stream');
-      return null; // null = not an XFA FBAR, fall through to Gemini
-    }
-
-    async function parsePriorFBAR(file, apiKey) {
-      // Try direct XFA extraction first (works on FinCEN BSA PDFs without AI)
-      try {
-        const xfaAccounts = await extractXFAAccounts(file);
-        if (xfaAccounts && xfaAccounts.length > 0) return xfaAccounts;
-      } catch(e) { console.warn('XFA extraction failed:', e); }
-
-      // Fall back to Gemini for non-XFA PDFs
-      const result = await callGemini(apiKey,
-        `This is a FinCEN 114 (FBAR) form for a US person with foreign financial accounts.
-Extract every foreign financial account listed. Return JSON:
-{"accounts":[{"institution_name":"string","account_number":"****XXXX (last 4 only)","account_type":"bank|brokerage|mf|other","account_holder":"string","max_value_usd":number,"year_end_value_usd":number,"currency":"string","tax_year":number}]}
-Only JSON, no explanation.`, file);
-      console.log('[tax-agent] parsePriorFBAR Gemini result:', result);
-      if (Array.isArray(result)) return result;
-      if (Array.isArray(result.accounts)) return result.accounts;
-      const firstArray = Object.values(result).find(v => Array.isArray(v));
-      if (firstArray) return firstArray;
-      return [];
     }
 
     // Platform/aggregator names that are not actual account-holding institutions
@@ -1411,7 +1354,7 @@ Return JSON array only (no markdown, no explanation):
 
           if (priorFbarFile) {
             try {
-              const extracted = await extractXFAAccounts(priorFbarFile);
+              const extracted = await parsePriorFBAR(priorFbarFile);
               if (extracted && extracted.length > 0) {
                 setAccts(extracted.map((a, i) => ({
                   id: String(i + 1),
@@ -1746,16 +1689,22 @@ Return JSON array only (no markdown, no explanation):
     // ─── MatchScreen ──────────────────────────────────────────────────────────
     function MatchScreen({ taxYear, accounts, setAccounts, fxRate, onNext, onBack }) {
       const priorYear = taxYear - 1;
-      const [stmtFiles, setStmtFiles] = useState([]);
-      const [matching, setMatching]   = useState(false);
-      const [matchDone, setMatchDone] = useState(false);
-      const [matchLog, setMatchLog]   = useState([]);
-      const [rows, setRows]           = useState(() =>
+      const [stmtFiles, setStmtFiles]   = useState([]);
+      const [matching, setMatching]     = useState(false);
+      const [matchDone, setMatchDone]   = useState(false);
+      const [matchLog, setMatchLog]     = useState([]);
+      const [rows, setRows]             = useState(() =>
         accounts.filter(a => a.include).map(a => ({
           ...a, matchStatus: 'pending', matchFile: null,
           statementPeriod: null, coversYear: true, textSnippet: '',
         }))
       );
+      const [notFound, setNotFound]     = useState([]); // [{name, reason}]
+      const [discovered, setDiscovered] = useState([]); // [{name,type,number,peak_balance_inr,statement_period,covers_tax_year,notes}]
+      // per-discovered-item: rejection annotation text and sent state
+      const [rejectAnnotations, setRejectAnnotations] = useState({});
+      const [rejectedItems, setRejectedItems]         = useState(new Set());
+
       const stmtRef        = useRef();
       const runningRef     = useRef(false);
       const feedbackTimers = useRef({});
@@ -1781,11 +1730,10 @@ Return JSON array only (no markdown, no explanation):
           setMatchDone(true); runningRef.current = false; return;
         }
 
-        setMatching(true);
-        setMatchDone(false);
+        setMatching(true); setMatchDone(false);
+        setNotFound([]); setDiscovered([]); setRejectedItems(new Set());
 
         try {
-          // Step 1: extract text from every file locally
           log.push(`Extracting text from ${files.length} file(s)…`);
           setMatchLog([...log]);
 
@@ -1807,18 +1755,18 @@ Return JSON array only (no markdown, no explanation):
             runningRef.current = false; return;
           }
 
-          // Step 2: send all texts + account names to worker /api/extract
-          log.push(`\nSending to extraction service (${currentRows.length} accounts, ${fileTexts.length} files)…`);
+          const knownAccounts = currentRows.map(r => ({
+            name: r.name, number: r.number, type: r.type,
+            ownership: r.ownership, priorMax: r.priorMax,
+          }));
+
+          log.push(`\nSending to extraction service (${knownAccounts.length} accounts, ${fileTexts.length} files)…`);
           setMatchLog([...log]);
 
           const resp = await fetch(`${WORKER_URL}/api/extract`, {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({
-              texts: fileTexts,
-              accounts: currentRows.map(r => r.name),
-              taxYear,
-            }),
+            body: JSON.stringify({ texts: fileTexts, knownAccounts, taxYear }),
           });
 
           if (!resp.ok) {
@@ -1826,52 +1774,51 @@ Return JSON array only (no markdown, no explanation):
             throw new Error(err.error || `Worker error ${resp.status}`);
           }
 
-          const results = await resp.json();
-          if (!Array.isArray(results)) throw new Error('Unexpected response format from worker');
+          const result = await resp.json();
+          if (result.error) throw new Error(result.error);
+          if (!result.matched || !result.not_found || !result.discovered) {
+            throw new Error('Unexpected response shape from worker');
+          }
 
-          log.push(`\nResults (${results.length}):`);
-
-          // Step 3: apply results — never overwrite FBAR name/number
-          setRows(prev => prev.map((r, i) => {
-            const res = results[i];
-            if (!res) return r;
-            const matched    = res.matched && (res.peak_balance_inr || 0) > 0;
-            const newMax     = matched ? Math.round(res.peak_balance_inr / fxRate) : null;
-            const period     = res.statement_period || null;
-            const coversYear = res.covers_tax_year !== false;
-            const snippet    = res.text_snippet || '';
-
-            if (matched) {
+          // Apply matched results
+          setRows(prev => prev.map(r => {
+            const m = result.matched.find(m => m.name === r.name);
+            if (m) {
+              const newMax = (m.peak_balance_inr || 0) > 0 ? Math.round(m.peak_balance_inr / fxRate) : null;
               log.push(`  ✓ ${r.name}`);
-              log.push(`     ₹${(res.peak_balance_inr||0).toLocaleString('en-IN')} → ${fmtUSD(newMax)}`);
-              if (period) log.push(`     period: ${period}${!coversYear ? '  ⚠ OUTSIDE TAX YEAR' : ''}`);
-              if (res.notes) log.push(`     ${res.notes}`);
-            } else {
-              log.push(`  · ${r.name} — not found${res.notes ? ': ' + res.notes : ''}`);
+              if (newMax) log.push(`     ₹${(m.peak_balance_inr).toLocaleString('en-IN')} → ${fmtUSD(newMax)}`);
+              if (m.statement_period) log.push(`     period: ${m.statement_period}${!m.covers_tax_year ? '  ⚠ OUTSIDE TAX YEAR' : ''}`);
+              if (m.notes) log.push(`     ${m.notes}`);
+              return {
+                ...r, newMax, newYearEnd: newMax,
+                matchStatus: newMax ? 'matched' : 'manual',
+                statementPeriod: m.statement_period || null,
+                coversYear: m.covers_tax_year !== false,
+                textSnippet: m.text_snippet || '',
+              };
             }
-
-            return {
-              ...r, newMax, newYearEnd: newMax,
-              matchFile: matched ? fileTexts.map(ft => ft.filename).join(', ').slice(0,40) : null,
-              matchStatus: matched ? 'matched' : 'manual',
-              statementPeriod: period, coversYear, textSnippet: snippet,
-            };
+            const nf = result.not_found.find(nf => nf.name === r.name);
+            if (nf) log.push(`  · ${r.name} — not found${nf.reason ? ': ' + nf.reason : ''}`);
+            return r;
           }));
+
+          setNotFound(result.not_found || []);
+          setDiscovered(result.discovered || []);
+
+          if (result.discovered.length > 0) {
+            log.push(`\n${result.discovered.length} additional account(s) found in statements — see below.`);
+          }
 
         } catch(e) {
           log.push(`\n✗ Error: ${e.message}`);
         }
 
         setMatchLog([...log]);
-        setMatching(false);
-        setMatchDone(true);
+        setMatching(false); setMatchDone(true);
         runningRef.current = false;
       }
 
-      function handleDrop(e) {
-        e.preventDefault();
-        addFiles(Array.from(e.dataTransfer.files));
-      }
+      function handleDrop(e) { e.preventDefault(); addFiles(Array.from(e.dataTransfer.files)); }
 
       function addFiles(newFiles) {
         const valid = newFiles.filter(f => /\.(pdf|xls|xlsx|csv)$/i.test(f.name));
@@ -1889,8 +1836,6 @@ Return JSON array only (no markdown, no explanation):
           if (r.id !== id) return r;
           const updated = {...r, [field]: isNaN(num) ? null : num,
             matchStatus: r.matchStatus === 'matched' ? 'matched' : 'manual'};
-
-          // Send correction feedback if user changed a matched balance by >5%
           if (field === 'newMax' && r.matchStatus === 'matched' && !isNaN(num)) {
             const extractedInr = Math.round((r.newMax || 0) * fxRate);
             const correctedInr = Math.round(num * fxRate);
@@ -1899,16 +1844,13 @@ Return JSON array only (no markdown, no explanation):
               clearTimeout(feedbackTimers.current[id]);
               feedbackTimers.current[id] = setTimeout(() => {
                 fetch(`${WORKER_URL}/api/feedback`, {
-                  method: 'POST',
-                  headers: {'Content-Type':'application/json'},
+                  method: 'POST', headers: {'Content-Type':'application/json'},
                   body: JSON.stringify({
-                    institution: r.name,
-                    text_snippet: r.textSnippet || '',
-                    extracted_inr: extractedInr,
-                    corrected_inr: correctedInr,
+                    institution: r.name, text_snippet: r.textSnippet || '',
+                    extracted_inr: extractedInr, corrected_inr: correctedInr,
                     notes: `User corrected in match screen (${taxYear} FBAR)`,
                   }),
-                }).catch(() => {}); // fire-and-forget
+                }).catch(() => {});
               }, 1500);
             }
           }
@@ -1916,15 +1858,46 @@ Return JSON array only (no markdown, no explanation):
         }));
       }
 
-      function proceed() {
-        setAccounts(rows);
-        onNext();
+      // Add a discovered account to the main account list
+      function approveDiscovered(item) {
+        const newAcct = {
+          id: String(Date.now()),
+          name: item.name,
+          number: item.number || '????',
+          type: item.type || 'other',
+          ownership: 'sole', joint_owner: null, currency: 'INR',
+          include: true, source: 'discovered',
+          priorMax: null, priorYearEnd: null,
+          newMax: item.covers_tax_year && item.peak_balance_inr
+            ? Math.round(item.peak_balance_inr / fxRate) : null,
+          newYearEnd: null, matchFile: null,
+          matchStatus: item.covers_tax_year && item.peak_balance_inr ? 'matched' : 'manual',
+          statementPeriod: item.statement_period || null,
+          coversYear: item.covers_tax_year !== false,
+          textSnippet: '',
+        };
+        setRows(prev => [...prev, newAcct]);
+        setDiscovered(prev => prev.filter(d => d.name !== item.name));
       }
 
-      const matched     = rows.filter(r => r.matchStatus === 'matched').length;
-      const manual      = rows.filter(r => r.matchStatus === 'manual').length;
-      const pending     = rows.filter(r => r.matchStatus === 'pending').length;
-      const outsideYear = rows.filter(r => r.matchStatus === 'matched' && r.coversYear === false).length;
+      // Reject a discovered account; send annotation to worker for learning
+      function rejectDiscovered(item) {
+        const annotation = (rejectAnnotations[item.name] || '').trim();
+        setRejectedItems(prev => new Set([...prev, item.name]));
+        setDiscovered(prev => prev.filter(d => d.name !== item.name));
+        fetch(`${WORKER_URL}/api/feedback`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ type: 'rejection', entity: item.name, annotation }),
+        }).catch(() => {});
+      }
+
+      function proceed() { setAccounts(rows); onNext(); }
+
+      const nMatched    = rows.filter(r => r.matchStatus === 'matched').length;
+      const nManual     = rows.filter(r => r.matchStatus === 'manual').length;
+      const nPending    = rows.filter(r => r.matchStatus === 'pending').length;
+      const nOutsideYr  = rows.filter(r => r.matchStatus === 'matched' && r.coversYear === false).length;
+      const nDiscovered = discovered.length;
 
       return (
         <div className="review-main">
@@ -1932,16 +1905,18 @@ Return JSON array only (no markdown, no explanation):
           <div className="top-row">
             <div>
               <div className="page-title">Match {taxYear} statements</div>
-              <div className="page-sub">Drop statement files, then click Start matching. Gemini will extract balances from all files at once.</div>
+              <div className="page-sub">Drop statement files, then click Start matching. Gemini will extract balances, flag missing accounts, and surface any additional accounts found in the statements.</div>
             </div>
             <div className="stat-row">
-              {matched > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--green-text)'}}>{matched}</div><div className="stat-label">matched</div></div>}
-              {outsideYear > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--amber-text)'}}>{outsideYear}</div><div className="stat-label">wrong year</div></div>}
-              {manual > 0  && <div className="stat"><div className="stat-val" style={{color:'var(--amber-text)'}}>{manual}</div><div className="stat-label">manual</div></div>}
-              {pending > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--text3)'}}>{pending}</div><div className="stat-label">pending</div></div>}
+              {nMatched > 0    && <div className="stat"><div className="stat-val" style={{color:'var(--green-text)'}}>{nMatched}</div><div className="stat-label">matched</div></div>}
+              {nOutsideYr > 0  && <div className="stat"><div className="stat-val" style={{color:'var(--amber-text)'}}>{nOutsideYr}</div><div className="stat-label">wrong year</div></div>}
+              {nManual > 0     && <div className="stat"><div className="stat-val" style={{color:'var(--amber-text)'}}>{nManual}</div><div className="stat-label">manual</div></div>}
+              {nPending > 0    && <div className="stat"><div className="stat-val" style={{color:'var(--text3)'}}>{nPending}</div><div className="stat-label">pending</div></div>}
+              {nDiscovered > 0 && <div className="stat"><div className="stat-val" style={{color:'var(--blue-text)'}}>{nDiscovered}</div><div className="stat-label">discovered</div></div>}
             </div>
           </div>
 
+          {/* Drop zone */}
           <div style={{display:'flex', gap:10, marginBottom:16, alignItems:'flex-start'}}>
             <div style={{flex:1, border:`0.5px dashed var(--border2)`, borderRadius:'var(--radius)', padding:'14px 18px',
                 background:'var(--bg2)', cursor:'pointer'}}
@@ -1972,6 +1947,7 @@ Return JSON array only (no markdown, no explanation):
           <input ref={stmtRef} type="file" accept=".pdf,.xls,.xlsx,.csv" multiple style={{display:'none'}}
             onChange={e => addFiles(Array.from(e.target.files))}/>
 
+          {/* Matched accounts table */}
           <div className="tbl-outer">
             <table>
               <thead>
@@ -1992,9 +1968,7 @@ Return JSON array only (no markdown, no explanation):
               <tbody>
                 {rows.map(r => (
                   <tr key={r.id} className={r.matchStatus === 'matched' ? (r.coversYear === false ? 'row-review' : '') : r.matchStatus === 'manual' ? 'row-review' : ''}>
-                    <td>
-                      <div style={{fontWeight:500, fontSize:13}}>{r.name}</div>
-                    </td>
+                    <td><div style={{fontWeight:500, fontSize:13}}>{r.name}</div></td>
                     <td className="mono">{r.number}</td>
                     <td style={{fontSize:12}}>{TYPE_LABELS[r.type] || r.type}</td>
                     <td className="muted pb">{fmtUSD(r.priorMax)}</td>
@@ -2008,10 +1982,7 @@ Return JSON array only (no markdown, no explanation):
                     </td>
                     <td style={{fontSize:11}}>
                       {r.statementPeriod
-                        ? <span>
-                            {r.statementPeriod}
-                            {r.coversYear === false && <span className="pill pill-amber" style={{marginLeft:6}}>⚠ wrong year</span>}
-                          </span>
+                        ? <span>{r.statementPeriod}{r.coversYear === false && <span className="pill pill-amber" style={{marginLeft:6}}>⚠ wrong year</span>}</span>
                         : r.matchStatus === 'manual'
                         ? <span style={{color:'var(--amber-text)'}}>enter manually</span>
                         : <span style={{color:'var(--text3)'}}>—</span>}
@@ -2022,6 +1993,64 @@ Return JSON array only (no markdown, no explanation):
             </table>
           </div>
 
+          {/* Not found */}
+          {matchDone && notFound.length > 0 && (
+            <div style={{marginTop:16}}>
+              <div className="section-label" style={{marginBottom:8}}>Not found in statements</div>
+              <div className="source-card">
+                {notFound.map((nf, i) => (
+                  <div key={i} className="source-row">
+                    <div>
+                      <div className="source-name">{nf.name}</div>
+                      {nf.reason && <div className="source-sub">{nf.reason}</div>}
+                    </div>
+                    <span className="pill pill-amber">missing</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Discovered accounts */}
+          {discovered.length > 0 && (
+            <div style={{marginTop:16}}>
+              <div className="section-label" style={{marginBottom:8}}>Found in statements — not in your account list</div>
+              <div className="source-card">
+                {discovered.map((d, i) => (
+                  <div key={i} style={{padding:'12px 14px', borderBottom:'0.5px solid var(--border)'}}>
+                    <div style={{display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontWeight:500, fontSize:13}}>{d.name}</div>
+                        <div style={{fontSize:12, color:'var(--text3)', marginTop:2}}>
+                          {TYPE_LABELS[d.type] || d.type}
+                          {d.number ? ` · ${d.number}` : ''}
+                          {d.peak_balance_inr ? ` · ₹${d.peak_balance_inr.toLocaleString('en-IN')} → ${fmtUSD(Math.round(d.peak_balance_inr / fxRate))}` : ''}
+                          {d.statement_period ? ` · ${d.statement_period}` : ''}
+                          {d.covers_tax_year === false ? <span className="pill pill-amber" style={{marginLeft:6}}>⚠ wrong year</span> : ''}
+                        </div>
+                        {d.notes && <div style={{fontSize:11, color:'var(--text3)', marginTop:2}}>{d.notes}</div>}
+                        <div style={{marginTop:8, display:'flex', gap:6, alignItems:'center'}}>
+                          <input
+                            type="text"
+                            placeholder="Reason for rejection (optional — helps future discovery)"
+                            style={{flex:1, fontSize:12, padding:'5px 8px', border:'0.5px solid var(--border2)', borderRadius:'var(--radius)', color:'var(--text)', background:'var(--bg)'}}
+                            value={rejectAnnotations[d.name] || ''}
+                            onChange={e => setRejectAnnotations(prev => ({...prev, [d.name]: e.target.value}))}
+                          />
+                        </div>
+                      </div>
+                      <div style={{display:'flex', gap:8, flexShrink:0, marginTop:2}}>
+                        <button className="btn-primary" style={{fontSize:12, padding:'5px 12px'}} onClick={() => approveDiscovered(d)}>Add to FBAR</button>
+                        <button className="btn-ghost" style={{fontSize:12, padding:'5px 12px'}} onClick={() => rejectDiscovered(d)}>Reject</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Matching log */}
           {matchDone && (
             <div style={{marginTop:12, padding:'10px 14px', background:'var(--bg2)', border:'0.5px solid var(--border)', borderRadius:'var(--radius)'}}>
               <div style={{fontSize:11, fontWeight:500, color:'var(--text3)', marginBottom:6}}>Gemini matching log</div>
