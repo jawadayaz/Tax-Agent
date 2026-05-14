@@ -351,6 +351,22 @@
           // XFA FBAR PDF — return normalised XML text for local account parsing
           return text.replace(/\n>/g, '>');
         }
+        // Also try chunk raw — some streams are uncompressed but stream-framed
+        const raw = new TextDecoder('utf-8', { fatal: false }).decode(chunk);
+        if (raw.includes('ffbar:BSAForm')) return raw.replace(/\n>/g, '>');
+      }
+
+      // ── Uncompressed XFA fallback ──────────────────────────────────────────
+      // Some BSA FBAR PDFs embed XFA as plain inline XML (not in compressed streams).
+      const rawPdf = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      const xfaIdx = rawPdf.indexOf('ffbar:BSAForm');
+      if (xfaIdx !== -1) {
+        const xmlDeclIdx = rawPdf.lastIndexOf('<?xml', xfaIdx);
+        const xdpIdx     = rawPdf.lastIndexOf('<xdp:', xfaIdx);
+        const startIdx   = xmlDeclIdx !== -1 ? xmlDeclIdx : (xdpIdx !== -1 ? xdpIdx : Math.max(0, xfaIdx - 2000));
+        const endTag     = rawPdf.indexOf('</xdp:', xfaIdx);
+        const endIdx     = endTag !== -1 ? endTag + 60 : Math.min(rawPdf.length, xfaIdx + 200000);
+        return rawPdf.slice(startIdx, endIdx).replace(/\n>/g, '>');
       }
 
       // ── Standard PDF via PDF.js ────────────────────────────────────────────
