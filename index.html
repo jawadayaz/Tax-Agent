@@ -300,14 +300,7 @@
       // ── XFA stream extraction ──────────────────────────────────────────────
       async function tryDecompress(chunk) {
         const attempts = [['deflate', chunk], ['deflate-raw', chunk]];
-        // Standard zlib header (0x78 xx): strip 2-byte header and try raw deflate
         if (chunk.length > 2 && chunk[0] === 0x78) attempts.push(['deflate-raw', chunk.slice(2)]);
-        // Non-standard zlib CMF (e.g. 0x48 used by BSA FBAR EmbeddedFile streams):
-        // Valid zlib requires CM=8 (deflate) in low 4 bits and (CMF*256+FLG)%31===0
-        if (chunk.length > 2 && chunk[0] !== 0x78 && (chunk[0] & 0xF) === 8 &&
-            (chunk[0] * 256 + chunk[1]) % 31 === 0) {
-          attempts.push(['deflate-raw', chunk.slice(2)]);
-        }
         for (const [fmt, data] of attempts) {
           try {
             const inputStream = new ReadableStream({ start(c) { c.enqueue(data); c.close(); } });
